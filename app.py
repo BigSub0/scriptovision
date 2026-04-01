@@ -641,6 +641,7 @@ async function proceedToGenerate() {
     scenes: approved,
     project_name: document.getElementById('project_name').value || 'my_project',
     provider: document.getElementById('provider').value,
+    style: document.getElementById('visual_style').value,
     fal_key: document.getElementById('fal_key').value,
     openai_key: document.getElementById('openai_key').value,
     bg_music: document.getElementById('bg_music').value,
@@ -912,6 +913,7 @@ def generate():
     oai_key  = data.get("openai_key", "")
     bg_music = data.get("bg_music", "")
     voice_map = data.get("voice_map", {})
+    style    = data.get("style", "cinematic photorealistic")  # Visual style for image generation
 
     job_id = str(uuid.uuid4())[:8]
     jobs[job_id] = {
@@ -959,7 +961,7 @@ def generate():
 
                 # Image
                 try:
-                    img_path = generate_image(scene, project)
+                    img_path = generate_image(scene, project, style=style)
                     scene["_image_path"] = img_path
                     log(f"[{sn}/{len(scenes)}] ✅ Image ready")
                 except Exception as e:
