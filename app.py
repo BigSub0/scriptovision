@@ -26,6 +26,10 @@ for d in [UPLOAD_DIR, OUTPUT_DIR, TEMP_DIR, IMAGES_DIR, AUDIO_DIR]:
 
 jobs = {}   # job_id → {status, logs, scenes, output, ...}
 
+# ── API keys loaded from environment variables (set on Render/Railway) ──
+# Keys are stored securely as environment variables, not in code
+os.environ["ANIMATION_PROVIDER"] = os.environ.get("ANIMATION_PROVIDER", "kling")
+
 # ─────────────────────────────────────────────────────────────────────────────
 # HTML UI
 # ─────────────────────────────────────────────────────────────────────────────
@@ -209,17 +213,17 @@ textarea{resize:vertical;min-height:120px;font-family:monospace;line-height:1.5}
 
       <label>AI Provider (for animation)</label>
       <select id="provider">
-        <option value="demo">Demo Mode (Ken Burns — No API needed)</option>
-        <option value="ltx2">LTX-2 — Best Audio+Video (Fal.ai)</option>
-        <option value="wan25">Wan 2.5 — High Quality (Fal.ai)</option>
-        <option value="kling">Kling Pro — Cinematic (Fal.ai)</option>
+        <option value="kling" selected>Kling 1.6 — Cinematic Movie Quality ✨</option>
+        <option value="kling_pro">Kling 1.6 Pro — Ultra Cinematic</option>
+        <option value="wan25">Wan 2.5 — High Quality</option>
+        <option value="ltx2">LTX-2 — Fast Generation</option>
       </select>
 
       <label>Fal.ai API Key</label>
-      <input type="password" id="fal_key" placeholder="fal_xxxxxxxx (leave blank for demo)">
+      <input type="password" id="fal_key" value="" placeholder="Pre-configured — leave blank to use server key">
 
       <label>OpenAI API Key</label>
-      <input type="password" id="openai_key" placeholder="sk-xxxxxxxx (for GPT + DALL-E + TTS)">
+      <input type="password" id="openai_key" value="" placeholder="Pre-configured — leave blank to use server key">
 
       <label>Background Music (optional)</label>
       <input type="text" id="bg_music" placeholder="/path/to/music.mp3">
@@ -916,6 +920,11 @@ def generate():
         "status_msg": "Initializing pipeline..."
     }
 
+    # ── FORCE KLING: Override demo/fallback if a Fal.ai key is present ──
+    active_fal_key = fal_key or os.environ.get("FAL_KEY", "")
+    if active_fal_key and provider in ("demo", "", None):
+        provider = "kling"
+
     def run():
         env = os.environ.copy()
         if fal_key:
@@ -923,6 +932,7 @@ def generate():
             env["FAL_API_KEY"]  = fal_key
             os.environ["FAL_KEY"]     = fal_key
             os.environ["FAL_API_KEY"] = fal_key
+        # FAL_KEY is set via Render environment variables
         if oai_key:
             env["OPENAI_API_KEY"] = oai_key
             os.environ["OPENAI_API_KEY"] = oai_key
