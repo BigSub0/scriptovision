@@ -27,7 +27,7 @@ For each scene you must output a JSON object with these exact fields:
 - "title": short scene title (5 words max)
 - "setting": where the scene takes place (used for image generation)
 - "characters": list of character names present
-- "image_prompt": a detailed DALL-E image generation prompt (cinematic, photorealistic, describe lighting, angle, mood, characters, environment — NO text in image)
+- "image_prompt": a detailed DALL-E image generation prompt that MUST match the visual style specified. Describe lighting, angle, mood, characters, environment — NO text in image.
 - "motion_prompt": how the scene should animate (camera movement, subject motion — 1-2 sentences, director style)
 - "voiceover": narrator text for this scene (if any, else empty string)
 - "dialogue": list of objects with "speaker" and "line" for each spoken line
@@ -35,10 +35,20 @@ For each scene you must output a JSON object with these exact fields:
 - "aspect_ratio": "16:9"
 - "mood": one word (e.g. tense, joyful, mysterious, dramatic)
 
-Rules:
+VISUAL STYLE RULES — CRITICAL:
+- "cinematic photorealistic": hyper-realistic photography, film grain, cinematic lighting, shallow depth of field, like a Hollywood movie still
+- "animated cartoon vibrant": bright vibrant 2D cartoon animation style, bold outlines, expressive characters, like a modern animated TV show or Pixar/Disney style
+- "comic book graphic novel": bold ink outlines, halftone dots, high contrast, dramatic angles, like Marvel/DC comics panels
+- "anime style detailed": Japanese anime art style, large expressive eyes, detailed backgrounds, cel-shaded, like Studio Ghibli or Demon Slayer
+- "dark gritty noir": high contrast black and white or desaturated, dramatic shadows, moody lighting, like a film noir
+- "urban street photography": candid street photo style, natural light, documentary feel, authentic urban environments
+- "watercolor illustrated": soft watercolor painting style, loose brushstrokes, pastel tones, illustrated book feel
+
+The image_prompt MUST start with the visual style description before describing the scene content.
+
+Other rules:
 - Keep scenes focused — one location, one key action per scene
 - Dialogue should be natural and match the script exactly
-- Image prompts must be cinematic and photorealistic unless the script specifies a style
 - Motion prompts describe movement, not content (the image handles content)
 - If there is no narrator, leave voiceover as empty string
 - Return ONLY a valid JSON array of scene objects, no other text
