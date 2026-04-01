@@ -20,7 +20,7 @@ IMAGES_DIR = Path(os.environ.get("BASE_DIR", "/home/ubuntu/scriptovision")) / "i
 IMAGES_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def generate_image(scene: dict, project_name: str = "project") -> str:
+def generate_image(scene: dict, project_name: str = "project", style: str = "cinematic photorealistic") -> str:
     """
     Generate an image for a scene. Returns the local file path.
     Uses DALL-E 3 if API key is available, otherwise creates a placeholder.
@@ -36,16 +36,28 @@ def generate_image(scene: dict, project_name: str = "project") -> str:
     api_key = os.environ.get("OPENAI_API_KEY", "")
 
     if api_key and not api_key.startswith("sk-demo"):
-        return _dalle_generate(prompt, str(filename))
+        return _dalle_generate(prompt, str(filename), style=style)
     else:
         return _placeholder_generate(scene, str(filename))
 
 
-def _dalle_generate(prompt: str, output_path: str) -> str:
+# Style-specific quality suffixes for DALL-E 3
+STYLE_SUFFIXES = {
+    "cinematic photorealistic": "No text, no watermarks. Cinematic film still, 8K, hyper-detailed.",
+    "animated cartoon vibrant": "No text, no watermarks. Vibrant 2D cartoon animation style, bold outlines, expressive, high quality.",
+    "comic book graphic novel": "No text, no watermarks. Comic book panel art, bold ink outlines, halftone shading, high contrast.",
+    "anime style detailed": "No text, no watermarks. Japanese anime style, cel-shaded, detailed backgrounds, Studio Ghibli quality.",
+    "dark gritty noir": "No text, no watermarks. Film noir, high contrast, dramatic shadows, desaturated, moody.",
+    "urban street photography": "No text, no watermarks. Candid street photography style, natural light, documentary feel.",
+    "watercolor illustrated": "No text, no watermarks. Soft watercolor painting, loose brushstrokes, illustrated book style.",
+}
+
+def _dalle_generate(prompt: str, output_path: str, style: str = "cinematic photorealistic") -> str:
     """Generate image using DALL-E 3."""
     # Ensure prompt is safe and within limits
     safe_prompt = prompt[:900]
-    safe_prompt += " No text, no watermarks, no logos. Cinematic film still."
+    suffix = STYLE_SUFFIXES.get(style, STYLE_SUFFIXES["cinematic photorealistic"])
+    safe_prompt += f" {suffix}"
 
     active_client = _get_client()
     response = active_client.images.generate(
