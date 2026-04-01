@@ -66,8 +66,11 @@ def _fal_upload_image(image_path: str, fal_key: str) -> str:
     return file_url
 
 
-def _fal_submit_job(model_id: str, payload: dict, fal_key: str) -> str:
-    """Submit a job to the Fal.ai async queue. Returns request_id."""
+def _fal_submit_job(model_id: str, payload: dict, fal_key: str) -> dict:
+    """Submit a job to the Fal.ai async queue.
+    Returns dict with request_id, status_url, and response_url
+    exactly as provided by Fal.ai (do NOT reconstruct these URLs manually).
+    """
     url = f"{FAL_QUEUE_BASE}/{model_id}"
     resp = requests.post(
         url,
@@ -80,16 +83,19 @@ def _fal_submit_job(model_id: str, payload: dict, fal_key: str) -> str:
     req_id = data.get("request_id")
     if not req_id:
         raise ValueError(f"No request_id in response: {data}")
-    return req_id
+    return {
+        "request_id": req_id,
+        "status_url": data.get("status_url"),      # Use Fal.ai's own status URL
+        "response_url": data.get("response_url"),  # Use Fal.ai's own result URL
+    }
 
 
-def _fal_poll_job(model_id: str, request_id: str, fal_key: str,
-                  max_wait: int = 300, poll_interval: int = 10) -> dict:
-    """Poll the Fal.ai queue until the job completes. Returns result dict."""
-    # Extract base model name (strip version suffix for queue URLs)
-    base = model_id.split("/")[0] + "/" + model_id.split("/")[1]
-    status_url = f"{FAL_QUEUE_BASE}/{model_id}/requests/{request_id}/status"
-    result_url = f"{FAL_QUEUE_BASE}/{model_id}/requests/{request_id}"
+def _fal_poll_job(status_url: str, response_url: str, request_id: str, fal_key: str,
+                  max_wait: int = 360, poll_interval: int = 12) -> dict:
+    """Poll the Fal.ai queue until the job completes. Returns result dict.
+    Uses the status_url and response_url returned by Fal.ai at submit time.
+    These URLs use the short base model path, NOT the full versioned path.
+    """
     headers = {"Authorization": f"Key {fal_key}"}
 
     elapsed = 0
@@ -97,13 +103,19 @@ def _fal_poll_job(model_id: str, request_id: str, fal_key: str,
         time.sleep(poll_interval)
         elapsed += poll_interval
 
-        r = requests.get(status_url, headers=headers, timeout=15)
-        r.raise_for_status()
+        try:
+            r = requests.get(status_url, headers=headers, timeout=20)
+            r.raise_for_status()
+        except requests.exceptions.RequestException as e:
+            print(f"    ⚠️  Poll error (retrying): {e}")
+            continue
+
         data = r.json()
         status = data.get("status", "UNKNOWN")
+        print(f"    ⏳ Job status: {status} ({elapsed}s elapsed)")
 
         if status == "COMPLETED":
-            result = requests.get(result_url, headers=headers, timeout=15)
+            result = requests.get(response_url, headers=headers, timeout=20)
             result.raise_for_status()
             return result.json()
         elif status in ("FAILED", "CANCELLED"):
@@ -200,11 +212,15 @@ def _kling_animate(image_path: str, motion_prompt: str, duration: str,
 
     # Step 3: Submit job
     print(f"    🎬 Submitting to {model_id}...")
-    request_id = _fal_submit_job(model_id, payload, fal_key)
-    print(f"    ⏳ Job {request_id[:8]}... queued, waiting for completion...")
+    job = _fal_submit_job(model_id, payload, fal_key)
+    request_id = job["request_id"]
+    status_url = job["status_url"]
+    response_url = job["response_url"]
+    print(f"    ⏳ Job {request_id[:8]}... queued")
+    print(f"    📡 Status URL: {status_url}")
 
-    # Step 4: Poll until done
-    result = _fal_poll_job(model_id, request_id, fal_key,
+    # Step 4: Poll until done (using Fal.ai's own URLs — not reconstructed)
+    result = _fal_poll_job(status_url, response_url, request_id, fal_key,
                            max_wait=360, poll_interval=12)
 
     # Step 5: Extract video URL
