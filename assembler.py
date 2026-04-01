@@ -148,20 +148,19 @@ def animate_scene(scene: dict, image_path: str, audio_path: str,
     fal_key = os.environ.get("FAL_KEY", os.environ.get("FAL_API_KEY", ""))
 
     if fal_key and provider != "demo":
-        try:
-            return _kling_animate(
-                image_path=image_path,
-                motion_prompt=motion,
-                duration=kling_duration,
-                audio_path=audio_path,
-                out_path=out_path,
-                fal_key=fal_key,
-                provider=provider
-            )
-        except Exception as e:
-            print(f"  ⚠️  AI animation failed ({e}), using Ken Burns fallback")
-            return _ken_burns_fallback(scene, image_path, audio_path, duration, out_path)
+        # Always use Kling AI animation — no Ken Burns fallback when key is present
+        return _kling_animate(
+            image_path=image_path,
+            motion_prompt=motion,
+            duration=kling_duration,
+            audio_path=audio_path,
+            out_path=out_path,
+            fal_key=fal_key,
+            provider=provider
+        )
     else:
+        # Only use Ken Burns if explicitly in demo mode (no API key)
+        print(f"  ⚠️  No Fal.ai key found — using demo mode. Add your Fal.ai key for real AI animation.")
         return _ken_burns_fallback(scene, image_path, audio_path, duration, out_path)
 
 
