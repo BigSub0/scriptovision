@@ -1078,4 +1078,5 @@ if __name__ == "__main__":
     print("║       ScriptoVision is Running       ║")
     print("║   Open: http://localhost:8080         ║")
     print("╚══════════════════════════════════════╝\n")
-    app.run(host="0.0.0.0", port=8080, debug=False)
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host="0.0.0.0", port=port, debug=False)
