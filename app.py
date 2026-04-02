@@ -512,6 +512,45 @@ You approve every scene before anything generates."></textarea>
 <!-- ═══════════════════════════════════════════════════════════ -->
 <script>
 // ─────────────────────────────────────────────────────────────────────────────
+// GLOBAL ERROR HANDLER — prevents blank screen on any uncaught JS error
+// ─────────────────────────────────────────────────────────────────────────────
+window.onerror = function(msg, src, line, col, err) {
+  console.error('[SV Error]', msg, src, line, col, err);
+  try {
+    const notif = document.getElementById('notif');
+    if (notif) {
+      notif.textContent = '⚠️ UI glitch caught: ' + msg + ' — recovering...';
+      notif.className = 'notif error';
+      notif.style.display = 'block';
+      setTimeout(() => { notif.style.display = 'none'; }, 6000);
+    }
+    // Never let all views go blank — always show at least one
+    const views = ['view-input','view-review','view-generate'];
+    const anyVisible = views.some(id => {
+      const el = document.getElementById(id);
+      return el && el.style.display !== 'none';
+    });
+    if (!anyVisible) {
+      const v = document.getElementById('view-input');
+      if (v) { v.style.display = 'block'; }
+    }
+  } catch(e2) { /* recovery itself failed — nothing we can do */ }
+  return false;
+};
+window.addEventListener('unhandledrejection', function(e) {
+  console.error('[SV Promise Error]', e.reason);
+  try {
+    const notif = document.getElementById('notif');
+    if (notif) {
+      const msg = (e.reason && e.reason.message) ? e.reason.message : String(e.reason);
+      notif.textContent = '⚠️ Network error: ' + msg;
+      notif.className = 'notif error';
+      notif.style.display = 'block';
+      setTimeout(() => { notif.style.display = 'none'; }, 5000);
+    }
+  } catch(e2) {}
+});
+// ─────────────────────────────────────────────────────────────────────────────
 // STATE
 // ─────────────────────────────────────────────────────────────────────────────
 let currentMode  = 'script';
@@ -1352,9 +1391,29 @@ def generate():
             from image_gen  import generate_image
             from tts_engine import generate_audio_for_scene, build_scene_audio_track
             from assembler  import process_scene, assemble_final_video
+            from tool_router import plan_project_tools
+
+            # ── Auto-select best tools for this project ──
+            tool_plan = plan_project_tools(scenes, style=style, provider_override=provider)
+            log(f"\n🤖 INTELLIGENT TOOL SELECTION")
+            log(f"   OpenAI:      {tool_plan['api_status']['openai']}")
+            log(f"   Fal.ai:      {tool_plan['api_status']['fal_ai']}")
+            log(f"   ElevenLabs:  {tool_plan['api_status']['elevenlabs']}")
+            log(f"   Strategy:    {tool_plan['overall_summary']}")
+            if tool_plan['animation_breakdown']:
+                breakdown = ', '.join(f"{k}: {v} scene(s)" for k,v in tool_plan['animation_breakdown'].items())
+                log(f"   Animation:   {breakdown}")
+            log("")
+            jobs[job_id]["tool_plan"] = tool_plan
+
+            # Use router's animation provider if user selected 'auto'
+            effective_provider = provider
+            if provider in ('auto', '', None):
+                first_anim = tool_plan['scene_plans'][0]['animation'] if tool_plan['scene_plans'] else {}
+                effective_provider = first_anim.get('provider_key', 'kling')
+                log(f"   Auto-selected animation: {effective_provider}")
 
             clip_paths = []
-
             for i, scene in enumerate(scenes):
                 sn    = scene.get("scene_number", i + 1)
                 title = scene.get("title", f"Scene {sn}")
@@ -1387,7 +1446,7 @@ def generate():
                 log(f"[{sn}/{len(scenes)}] 🎬 Animating scene...")
                 jobs[job_id]["status_msg"] = f"Scene {sn}/{len(scenes)} — animating..."
                 try:
-                    clip = process_scene(scene, project, provider, add_captions=True)
+                    clip = process_scene(scene, project, effective_provider, add_captions=True)
                     clip_paths.append(clip)
                     jobs[job_id]["scenes_done"] = i + 1
                     log(f"[{sn}/{len(scenes)}] ✅ Scene complete → {clip}")
@@ -1418,6 +1477,25 @@ def generate():
 @app.route("/status/<job_id>")
 def status(job_id):
     return jsonify(jobs.get(job_id, {"status": "not_found"}))
+
+
+@app.route("/tool_plan", methods=["POST"])
+def tool_plan_endpoint():
+    """Return the intelligent tool plan for a set of scenes before generation."""
+    data   = request.json or {}
+    scenes = data.get("scenes", [])
+    style  = data.get("style", "cinematic photorealistic")
+    provider = data.get("provider", "auto")
+    fal_key = data.get("fal_key", "")
+    oai_key = data.get("openai_key", "")
+    if fal_key: os.environ["FAL_KEY"] = fal_key
+    if oai_key: os.environ["OPENAI_API_KEY"] = oai_key
+    try:
+        from tool_router import plan_project_tools
+        plan = plan_project_tools(scenes, style=style, provider_override=provider)
+        return jsonify(plan)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/scene_image/<job_id>/<int:scene_num>")

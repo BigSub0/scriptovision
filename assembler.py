@@ -91,38 +91,45 @@ def _fal_submit_job(model_id: str, payload: dict, fal_key: str) -> dict:
 
 
 def _fal_poll_job(status_url: str, response_url: str, request_id: str, fal_key: str,
-                  max_wait: int = 360, poll_interval: int = 12) -> dict:
+                  max_wait: int = 600, poll_interval: int = 12) -> dict:
     """Poll the Fal.ai queue until the job completes. Returns result dict.
     Uses the status_url and response_url returned by Fal.ai at submit time.
-    These URLs use the short base model path, NOT the full versioned path.
+    Timeout extended to 600s (10 min) to handle peak-hour queue delays.
     """
     headers = {"Authorization": f"Key {fal_key}"}
 
     elapsed = 0
+    consecutive_errors = 0
     while elapsed < max_wait:
         time.sleep(poll_interval)
         elapsed += poll_interval
 
         try:
-            r = requests.get(status_url, headers=headers, timeout=20)
+            r = requests.get(status_url, headers=headers, timeout=30)
             r.raise_for_status()
+            consecutive_errors = 0  # reset on success
         except requests.exceptions.RequestException as e:
-            print(f"    ⚠️  Poll error (retrying): {e}")
+            consecutive_errors += 1
+            print(f"    ⚠️  Poll error #{consecutive_errors} (retrying): {e}")
+            if consecutive_errors >= 5:
+                raise RuntimeError(f"Fal.ai polling failed after 5 consecutive errors: {e}")
             continue
 
         data = r.json()
         status = data.get("status", "UNKNOWN")
-        print(f"    ⏳ Job status: {status} ({elapsed}s elapsed)")
+        queue_pos = data.get("queue_position", "")
+        pos_str = f" | queue pos: {queue_pos}" if queue_pos else ""
+        print(f"    ⏳ Job status: {status} ({elapsed}s elapsed){pos_str}")
 
         if status == "COMPLETED":
-            result = requests.get(response_url, headers=headers, timeout=20)
+            result = requests.get(response_url, headers=headers, timeout=30)
             result.raise_for_status()
             return result.json()
         elif status in ("FAILED", "CANCELLED"):
             raise RuntimeError(f"Fal.ai job {request_id} {status}: {data}")
         # IN_QUEUE or IN_PROGRESS — keep polling
 
-    raise TimeoutError(f"Fal.ai job {request_id} did not complete in {max_wait}s")
+    raise TimeoutError(f"Fal.ai job {request_id} did not complete in {max_wait}s — try again during off-peak hours")
 
 
 def _fal_download_video(video_url: str, out_path: str) -> str:
@@ -221,7 +228,7 @@ def _kling_animate(image_path: str, motion_prompt: str, duration: str,
 
     # Step 4: Poll until done (using Fal.ai's own URLs — not reconstructed)
     result = _fal_poll_job(status_url, response_url, request_id, fal_key,
-                           max_wait=360, poll_interval=12)
+                           max_wait=600, poll_interval=12)
 
     # Step 5: Extract video URL
     video_url = (
