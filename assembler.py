@@ -36,34 +36,35 @@ DEFAULT_MODEL = "kling"
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _fal_upload_image(image_path: str, fal_key: str) -> str:
-    """Upload a local image to Fal.ai storage and return the public URL."""
-    with open(image_path, "rb") as f:
-        img_bytes = f.read()
+    """
+    Upload a local image to Fal.ai CDN and return the public URL.
+    Uses the official fal_client SDK (handles auth, retries, fallback endpoints).
+    Falls back to base64 data URI if SDK upload fails.
+    """
+    import base64
 
-    # Determine content type
     ext = Path(image_path).suffix.lower()
     content_type = "image/png" if ext == ".png" else "image/jpeg"
 
-    init_resp = requests.post(
-        "https://rest.alpha.fal.ai/storage/upload/initiate",
-        headers={"Authorization": f"Key {fal_key}", "Content-Type": "application/json"},
-        json={"content_type": content_type, "file_name": Path(image_path).name},
-        timeout=15
-    )
-    init_resp.raise_for_status()
-    data = init_resp.json()
-    file_url = data["file_url"]
-    upload_url = data["upload_url"]
+    # Method 1: Use official fal_client SDK (recommended by Fal.ai docs)
+    try:
+        import fal_client
+        os.environ["FAL_KEY"] = fal_key
+        url = fal_client.upload_file(image_path)
+        print(f"    ✅ Uploaded via fal_client SDK: {url[:60]}...")
+        return url
+    except Exception as e:
+        print(f"    ⚠️  fal_client upload failed ({e}), trying data URI fallback...")
 
-    # PUT the image bytes
-    put_resp = requests.put(
-        upload_url,
-        data=img_bytes,
-        headers={"Content-Type": content_type},
-        timeout=60
-    )
-    put_resp.raise_for_status()
-    return file_url
+    # Method 2: Base64 data URI (works with all Fal.ai models, no upload needed)
+    try:
+        with open(image_path, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode()
+        data_uri = f"data:{content_type};base64,{b64}"
+        print(f"    ✅ Using base64 data URI ({len(data_uri)//1024}KB)")
+        return data_uri
+    except Exception as e:
+        raise RuntimeError(f"All image upload methods failed: {e}")
 
 
 def _fal_submit_job(model_id: str, payload: dict, fal_key: str) -> dict:

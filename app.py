@@ -429,6 +429,13 @@ You approve every scene before anything generates."></textarea>
           </div>
         </div>
 
+        <!-- Job bookmark bar -->
+        <div id="job-bookmark-bar" style="display:none;background:#1a1a2e;border:1px solid #333;border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:.82rem;color:#aaa;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <span>\U0001f4f1 <strong>Phone going to sleep?</strong> Bookmark this link to check back later:</span>
+          <a id="job-status-link" href="#" target="_blank" style="color:#e94560;font-weight:700;word-break:break-all">Loading...</a>
+          <button onclick="copyJobLink()" style="background:#333;border:none;color:#eee;padding:4px 10px;border-radius:4px;cursor:pointer;font-size:.78rem">Copy Link</button>
+        </div>
+
         <!-- Download box -->
         <div class="download-box" id="download-box">
           <div class="big-icon">🎉</div>
@@ -1024,6 +1031,7 @@ async function proceedToGenerate() {
     const data = await resp.json();
     currentJobId = data.job_id;
     saveJob(currentJobId, project, approvedScenes.length);
+    showJobBookmark(currentJobId);  // Show bookmark link immediately
     pollJob(currentJobId, approvedScenes.length);
   } catch(e) {
     logLine('Error starting generation: ' + e);
@@ -1162,6 +1170,29 @@ function onJobDone(jobId) {
   setStep(5);
   notify('🎉 Your video is ready!');
   clearSavedJob();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// JOB BOOKMARK
+// ─────────────────────────────────────────────────────────────────────────────
+function showJobBookmark(jobId) {
+  const bar = document.getElementById('job-bookmark-bar');
+  const link = document.getElementById('job-status-link');
+  if (!bar || !link) return;
+  const url = window.location.origin + '/job/' + jobId;
+  link.href = url;
+  link.textContent = url;
+  bar.style.display = 'flex';
+}
+
+function copyJobLink() {
+  const link = document.getElementById('job-status-link');
+  if (!link) return;
+  navigator.clipboard.writeText(link.href).then(() => {
+    notify('\u2705 Job link copied! Paste it in your browser anytime to check progress.');
+  }).catch(() => {
+    notify('Link: ' + link.href);
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1569,6 +1600,61 @@ def generate():
 
     threading.Thread(target=run, daemon=True).start()
     return jsonify({"job_id": job_id})
+
+
+@app.route("/job/<job_id>")
+def job_page(job_id):
+    """Standalone job status page — bookmarkable, works after phone sleep."""
+    job = jobs.get(job_id, {})
+    status = job.get("status", "not_found")
+    scenes_done = job.get("scenes_done", 0)
+    total_scenes = job.get("total_scenes", 0)
+    status_msg = job.get("status_msg", "")
+    output = job.get("output")
+    logs = job.get("logs", "")
+
+    if status == "done" and output and Path(output).exists():
+        action_html = f'<a href="/download/{job_id}" class="btn" download>\u2b07\ufe0f Download Your Video</a>'
+    elif status == "error":
+        action_html = '<p style="color:#e94560">\u274c Generation failed. <a href="/" style="color:#e94560">Start over</a></p>'
+    elif status == "not_found":
+        action_html = '<p style="color:#aaa">Job not found. Server may have restarted. <a href="/" style="color:#aaa">Start over</a></p>'
+    else:
+        pct = int(min(95, 5 + (scenes_done / max(total_scenes, 1)) * 88))
+        action_html = f'''
+        <div style="background:#1a1a2e;border-radius:8px;height:12px;margin:16px 0">
+          <div style="background:#e94560;height:12px;border-radius:8px;width:{pct}%;transition:width 1s"></div>
+        </div>
+        <p style="color:#aaa">{scenes_done}/{total_scenes} scenes done &mdash; {status_msg}</p>
+        <p style="color:#777;font-size:.8rem">This page auto-refreshes every 15 seconds. Keep it open or come back later.</p>
+        <meta http-equiv="refresh" content="15">
+        '''
+
+    page = f"""
+    <!DOCTYPE html><html><head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>ScriptoVision — Job {job_id}</title>
+    <style>
+      body{{font-family:system-ui,sans-serif;background:#0f0f1a;color:#eee;margin:0;padding:24px;text-align:center}}
+      h1{{color:#e94560;font-size:1.6rem;margin-bottom:4px}}
+      .status{{font-size:1.1rem;color:#aaa;margin:8px 0 24px}}
+      .btn{{display:inline-block;background:#e94560;color:#fff;padding:14px 32px;border-radius:8px;
+            text-decoration:none;font-size:1.1rem;font-weight:700;margin-top:16px}}
+      .log{{background:#1a1a2e;border-radius:8px;padding:16px;text-align:left;
+            font-family:monospace;font-size:.78rem;color:#aaa;max-height:300px;
+            overflow-y:auto;white-space:pre-wrap;margin-top:24px}}
+      a{{color:#e94560}}
+    </style>
+    </head><body>
+    <h1>\U0001f3ac ScriptoVision</h1>
+    <div class="status">Job: <code>{job_id}</code> &mdash; <strong>{status.upper()}</strong></div>
+    {action_html}
+    <div class="log">{logs[-3000:] if logs else 'No logs yet.'}</div>
+    <p style="margin-top:24px"><a href="/">\u2190 Back to ScriptoVision</a></p>
+    </body></html>
+    """
+    return page
 
 
 @app.route("/status/<job_id>")
