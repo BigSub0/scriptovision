@@ -166,6 +166,25 @@ def animate_scene(scene: dict, image_path: str, audio_path: str,
 
     fal_key = os.environ.get("FAL_KEY", os.environ.get("FAL_API_KEY", ""))
 
+    # ── Guard: if image failed to generate, create a placeholder so animation never crashes ──
+    if not image_path or not Path(image_path).exists():
+        print(f"  ⚠️  Image missing for scene {scene_num} — generating placeholder so animation can continue...")
+        try:
+            from image_gen import _placeholder_generate
+            placeholder_path = str(TEMP_DIR / f"{project_name}_placeholder_{scene_num:02d}.png")
+            image_path = _placeholder_generate(scene, placeholder_path)
+            scene["_image_path"] = image_path
+        except Exception as pe:
+            print(f"  ❌  Placeholder generation failed: {pe} — skipping animation")
+            # Create a minimal black frame as absolute last resort
+            import subprocess as _sp
+            _sp.run([
+                "ffmpeg", "-y", "-f", "lavfi",
+                "-i", f"color=black:size=1280x720:duration={duration}",
+                "-c:v", "libx264", "-pix_fmt", "yuv420p", out_path
+            ], capture_output=True)
+            return out_path
+
     if fal_key and provider != "demo":
         # Always use Kling AI animation — no Ken Burns fallback when key is present
         return _kling_animate(

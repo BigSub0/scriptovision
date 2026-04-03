@@ -27,6 +27,10 @@ jobs = {}   # job_id → {status, logs, scenes, output, scene_images, ...}
 
 # ── API keys loaded from environment variables (set on Render/Railway) ──
 os.environ["ANIMATION_PROVIDER"] = os.environ.get("ANIMATION_PROVIDER", "kling")
+# Pre-load ElevenLabs key so tool_router sees it from the first request
+_EL_KEY = os.environ.get("ELEVENLABS_API_KEY", "sk_e8ede427e79a39b9d92ff69e531f85dc568b0373211b1fa2")
+if _EL_KEY:
+    os.environ["ELEVENLABS_API_KEY"] = _EL_KEY
 
 # ─────────────────────────────────────────────────────────────────────────────
 # HTML UI  — v3 Redesign
