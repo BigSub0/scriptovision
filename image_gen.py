@@ -192,8 +192,13 @@ def _placeholder_generate(scene: dict, output_path: str) -> str:
         from PIL import Image, ImageDraw, ImageFont
     except ImportError:
         import subprocess
-        subprocess.run(["sudo", "pip3", "install", "pillow"], capture_output=True)
-        from PIL import Image, ImageDraw, ImageFont
+        # Try pip3 install without sudo (Render/cloud environments don't have sudo)
+        subprocess.run(["pip3", "install", "pillow"], capture_output=True)
+        try:
+            from PIL import Image, ImageDraw, ImageFont
+        except ImportError:
+            subprocess.run(["python3", "-m", "pip", "install", "pillow"], capture_output=True)
+            from PIL import Image, ImageDraw, ImageFont
 
     scene_num = scene.get("scene_number", 1)
     title = scene.get("title", f"Scene {scene_num}")
