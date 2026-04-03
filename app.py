@@ -463,6 +463,21 @@ You approve every scene before anything generates."></textarea>
             <button class="btn btn-secondary btn-sm" onclick="startOver()">🔄 Start Over</button>
           </div>
         </div>
+
+        <!-- Retry box (shown when some scenes failed but others succeeded) -->
+        <div class="download-box" id="retry-box" style="display:none;background:#1a1208;border:2px dashed #f1c40f">
+          <div class="big-icon">⚠️</div>
+          <h2 style="color:#f1c40f">Some Scenes Failed</h2>
+          <p style="color:#aaa" id="retry-summary">Some scenes failed. A partial video was assembled from the scenes that completed.</p>
+          <div class="btn-row" style="justify-content:center;gap:10px;margin-top:14px">
+            <button class="download-btn" style="background:#f1c40f;color:#000" onclick="triggerRetry()">🔄 Retry Failed Scenes Only</button>
+            <a id="partial-download-link" href="#" download class="download-btn" style="background:#555">⬇️ Download Partial Video</a>
+          </div>
+          <p style="color:#555;font-size:.75rem;margin-top:10px">Retry only regenerates the failed scenes — completed scenes are kept.</p>
+          <div class="btn-row" style="justify-content:center;margin-top:10px">
+            <button class="btn btn-secondary btn-sm" onclick="startOver()">🔄 Start Over</button>
+          </div>
+        </div>
       </div>
 
     </div>
@@ -1112,6 +1127,10 @@ async function pollJob(jobId, totalScenes) {
       if (data.status === 'done') {
         onJobDone(jobId);
         break;
+      } else if (data.status === 'partial_done') {
+        // Some scenes failed but a partial video was assembled
+        onPartialDone(jobId, data);
+        break;
       } else if (data.status === 'error') {
         const el = document.getElementById('log-output');
         if (el) el.textContent += '\n\n\u274c ERROR: ' + (data.error || 'Unknown error');
@@ -1175,6 +1194,86 @@ function onJobDone(jobId) {
   setStep(5);
   notify('🎉 Your video is ready!');
   clearSavedJob();
+}
+
+function onPartialDone(jobId, data) {
+  // Some scenes failed — show retry box with partial download option
+  const pf = document.getElementById('progress-fill');
+  if (pf) pf.style.width = '100%';
+  const pd = document.getElementById('pulse-dot');
+  if (pd) pd.style.background = '#f1c40f';
+  const gs = document.getElementById('gen-status');
+  if (gs) gs.textContent = '⚠️ Partial — some scenes failed';
+
+  const failedCount = data.scene_failures ? Object.keys(data.scene_failures).length : '?';
+  const totalCount  = data.total_scenes || '?';
+  const doneCount   = data.scenes_done  || '?';
+
+  const summary = document.getElementById('retry-summary');
+  if (summary) summary.textContent = `${failedCount} scene(s) failed out of ${totalCount}. A partial video (${doneCount} scenes) was assembled. Click 'Retry Failed Scenes Only' to fix and get the full video.`;
+
+  const retryBox = document.getElementById('retry-box');
+  if (retryBox) retryBox.style.display = 'block';
+
+  const pdl = document.getElementById('partial-download-link');
+  if (pdl) pdl.href = '/download/' + jobId;
+
+  // Store job_id for retry
+  window._currentJobId = jobId;
+  setStep(5);
+  notify('⚠️ Some scenes failed. Retry available.', true);
+  clearSavedJob();
+}
+
+async function triggerRetry() {
+  const jobId = window._currentJobId;
+  if (!jobId) { notify('No job to retry. Please regenerate.', true); return; }
+
+  const retryBox = document.getElementById('retry-box');
+  if (retryBox) retryBox.innerHTML = '<div class="big-icon">⏳</div><h2 style="color:#f1c40f">Retrying Failed Scenes...</h2><p style="color:#aaa">Only regenerating the scenes that failed. Completed scenes are preserved.</p>';
+
+  try {
+    const resp = await fetch('/retry', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ job_id: jobId })
+    });
+    const data = await resp.json();
+    if (data.error) { notify(data.error, true); return; }
+
+    const retryJobId = data.job_id;
+    notify('🔄 Retrying ' + (data.retrying_scenes || []).length + ' scene(s)...');
+
+    // Poll retry job
+    while (true) {
+      await new Promise(r => setTimeout(r, 5000));
+      const sr = await fetch('/status/' + retryJobId);
+      const sd = await sr.json();
+
+      // Update log
+      const el = document.getElementById('log-output');
+      if (el && sd.logs) { el.textContent = sd.logs; el.scrollTop = el.scrollHeight; }
+
+      if (sd.status === 'done') {
+        if (retryBox) retryBox.style.display = 'none';
+        const db = document.getElementById('download-box');
+        if (db) db.style.display = 'block';
+        const dl = document.getElementById('download-link');
+        if (dl) dl.href = '/download/' + retryJobId;
+        notify('🎉 All scenes complete! Full video ready to download.');
+        break;
+      } else if (sd.status === 'partial_done') {
+        window._currentJobId = retryJobId;
+        onPartialDone(retryJobId, sd);
+        break;
+      } else if (sd.status === 'error') {
+        notify('Retry failed: ' + (sd.error || 'Unknown error'), true);
+        break;
+      }
+    }
+  } catch(e) {
+    notify('Retry error: ' + e, true);
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1493,9 +1592,17 @@ def generate():
     job_id = str(uuid.uuid4())[:8]
     jobs[job_id] = {
         "status": "running", "logs": "Starting...\n",
-        "scenes_done": 0, "output": None,
+        "scenes_done": 0, "total_scenes": len(scenes), "output": None,
         "status_msg": "Initializing pipeline...",
-        "scene_images": {}   # scene_number → local image path
+        "scene_images": {},       # scene_number → local image path
+        "scene_clips": {},        # scene_number → completed clip path
+        "scene_failures": {},     # scene_number → error message
+        "scenes_data": scenes,    # full scene data for retry
+        "project": project,
+        "provider": provider,
+        "voice_map": voice_map,
+        "style": style,
+        "bg_music": bg_music,
     }
 
     # Force Kling if Fal.ai key is present
@@ -1581,21 +1688,38 @@ def generate():
                 try:
                     clip = process_scene(scene, project, effective_provider, add_captions=True)
                     clip_paths.append(clip)
-                    jobs[job_id]["scenes_done"] = i + 1
+                    jobs[job_id]["scene_clips"][str(sn)] = clip   # persist success
+                    jobs[job_id]["scenes_done"] = len(jobs[job_id]["scene_clips"])
                     log(f"[{sn}/{len(scenes)}] ✅ Scene complete → {clip}")
                 except Exception as e:
-                    log(f"[{sn}/{len(scenes)}] ❌ Animation failed: {e}")
+                    err = str(e)
+                    jobs[job_id]["scene_failures"][str(sn)] = err  # persist failure
+                    log(f"[{sn}/{len(scenes)}] ❌ Animation failed: {err}")
 
-            if not clip_paths:
-                raise ValueError("No clips were generated")
+            # Build ordered clip list from scene_clips (preserves scene order)
+            ordered_clips = []
+            for sc in scenes:
+                sn_key = str(sc.get("scene_number", ""))
+                if sn_key in jobs[job_id]["scene_clips"]:
+                    ordered_clips.append(jobs[job_id]["scene_clips"][sn_key])
 
-            log(f"\n🔗 Assembling {len(clip_paths)} clips into final video...")
+            failed_count = len(jobs[job_id]["scene_failures"])
+            if not ordered_clips:
+                raise ValueError("No clips were generated — all scenes failed")
+
+            if failed_count > 0:
+                log(f"\n⚠️  {failed_count} scene(s) failed. Assembling {len(ordered_clips)}/{len(scenes)} completed scenes...")
+                log(f"   Use 'Retry Failed Scenes' to fix and reassemble.")
+                jobs[job_id]["status"] = "partial"  # partial success
+            else:
+                log(f"\n🔗 Assembling {len(ordered_clips)} clips into final video...")
+
             jobs[job_id]["status_msg"] = "Assembling final video..."
             bg = bg_music if bg_music and Path(bg_music).exists() else None
-            final = assemble_final_video(clip_paths, project, bg)
+            final = assemble_final_video(ordered_clips, project, bg)
             jobs[job_id]["output"] = final
-            jobs[job_id]["status"] = "done"
-            jobs[job_id]["status_msg"] = "Done!"
+            jobs[job_id]["status"] = "done" if failed_count == 0 else "partial_done"
+            jobs[job_id]["status_msg"] = "Done!" if failed_count == 0 else f"Done ({failed_count} scene(s) failed — retry available)"
             log(f"\n✅ COMPLETE! → {final}")
 
         except Exception as e:
@@ -1676,7 +1800,20 @@ def status(job_id):
             "output": None,
             "scene_images": {}
         })
-    return jsonify(job)
+    # Return a safe serializable subset (exclude large scenes_data blob)
+    safe = {
+        "status":         job.get("status"),
+        "logs":           job.get("logs", ""),
+        "scenes_done":    job.get("scenes_done", 0),
+        "total_scenes":   job.get("total_scenes", 0),
+        "status_msg":     job.get("status_msg", ""),
+        "output":         job.get("output"),
+        "error":          job.get("error"),
+        "scene_images":   job.get("scene_images", {}),
+        "scene_failures": job.get("scene_failures", {}),
+        "scene_clips":    {k: str(v) for k, v in job.get("scene_clips", {}).items()},
+    }
+    return jsonify(safe)
 
 
 @app.route("/tool_plan", methods=["POST"])
@@ -1791,6 +1928,138 @@ def reassemble():
 
     threading.Thread(target=run_reassemble, daemon=True).start()
     return jsonify({"job_id": job_id})
+
+
+@app.route("/retry", methods=["POST"])
+def retry_failed():
+    """
+    Retry only the failed scenes from a previous job.
+    Keeps all successful clips, only regenerates failed ones, then reassembles.
+    """
+    data         = request.json or {}
+    original_job = data.get("job_id", "")
+
+    job = jobs.get(original_job, {})
+    if not job:
+        return jsonify({"error": "Original job not found"}), 404
+
+    failed_scenes_nums = list(job.get("scene_failures", {}).keys())
+    if not failed_scenes_nums:
+        return jsonify({"error": "No failed scenes to retry"}), 400
+
+    all_scenes   = job.get("scenes_data", [])
+    project      = job.get("project", "project")
+    provider     = job.get("provider", "kling")
+    voice_map    = job.get("voice_map", {})
+    style        = job.get("style", "cinematic photorealistic")
+    bg_music     = job.get("bg_music", "")
+    scene_clips  = dict(job.get("scene_clips", {}))  # copy existing successes
+
+    # Find the scenes that failed
+    failed_scenes = [s for s in all_scenes
+                     if str(s.get("scene_number", "")) in failed_scenes_nums]
+
+    retry_job_id = str(uuid.uuid4())[:8]
+    jobs[retry_job_id] = {
+        "status": "running",
+        "logs": f"Retrying {len(failed_scenes)} failed scene(s)...\n",
+        "scenes_done": 0,
+        "total_scenes": len(failed_scenes),
+        "output": None,
+        "status_msg": f"Retrying {len(failed_scenes)} scene(s)...",
+        "scene_images": dict(job.get("scene_images", {})),
+        "scene_clips": scene_clips,
+        "scene_failures": {},
+        "scenes_data": all_scenes,
+        "project": project,
+        "provider": provider,
+        "voice_map": voice_map,
+        "style": style,
+        "bg_music": bg_music,
+    }
+
+    def run_retry():
+        try:
+            import sys
+            sys.path.insert(0, str(_BASE))
+            from image_gen  import generate_image
+            from tts_engine import generate_audio_for_scene, build_scene_audio_track
+            from assembler  import process_scene, assemble_final_video
+
+            log_lines = []
+            def log(msg):
+                log_lines.append(msg)
+                jobs[retry_job_id]["logs"] = "\n".join(log_lines[-120:])
+
+            log(f"🔄 Retrying {len(failed_scenes)} failed scene(s): {', '.join(failed_scenes_nums)}")
+            log(f"✅ Keeping {len(scene_clips)} already-completed scene(s)\n")
+
+            for scene in failed_scenes:
+                sn    = scene.get("scene_number", "?")
+                title = scene.get("title", f"Scene {sn}")
+                total = len(all_scenes)
+
+                log(f"[{sn}/{total}] 🖼️  Regenerating image: {title}")
+                jobs[retry_job_id]["status_msg"] = f"Scene {sn} — regenerating image..."
+                try:
+                    img_path = generate_image(scene, project, style=style)
+                    scene["_image_path"] = img_path
+                    jobs[retry_job_id]["scene_images"][str(sn)] = img_path
+                    log(f"[{sn}/{total}] ✅ Image ready")
+                except Exception as e:
+                    log(f"[{sn}/{total}] ⚠️  Image failed: {e}")
+                    scene["_image_path"] = ""
+
+                log(f"[{sn}/{total}] 🎙️  Regenerating audio...")
+                jobs[retry_job_id]["status_msg"] = f"Scene {sn} — regenerating audio..."
+                try:
+                    audio_result = generate_audio_for_scene(scene, project, voice_map)
+                    audio_path   = build_scene_audio_track(scene, audio_result, project)
+                    scene["_audio_path"] = audio_path
+                    log(f"[{sn}/{total}] ✅ Audio ready")
+                except Exception as e:
+                    log(f"[{sn}/{total}] ⚠️  Audio failed: {e}")
+                    scene["_audio_path"] = ""
+
+                log(f"[{sn}/{total}] 🎬 Animating scene...")
+                jobs[retry_job_id]["status_msg"] = f"Scene {sn} — animating..."
+                try:
+                    clip = process_scene(scene, project, provider, add_captions=True)
+                    jobs[retry_job_id]["scene_clips"][str(sn)] = clip
+                    jobs[retry_job_id]["scenes_done"] += 1
+                    log(f"[{sn}/{total}] ✅ Scene complete → {clip}")
+                except Exception as e:
+                    err = str(e)
+                    jobs[retry_job_id]["scene_failures"][str(sn)] = err
+                    log(f"[{sn}/{total}] ❌ Animation failed again: {err}")
+
+            # Assemble all clips in scene order
+            ordered_clips = []
+            for sc in all_scenes:
+                sn_key = str(sc.get("scene_number", ""))
+                if sn_key in jobs[retry_job_id]["scene_clips"]:
+                    ordered_clips.append(jobs[retry_job_id]["scene_clips"][sn_key])
+
+            still_failed = len(jobs[retry_job_id]["scene_failures"])
+            if not ordered_clips:
+                raise ValueError("All scenes failed — nothing to assemble")
+
+            log(f"\n🔗 Assembling {len(ordered_clips)}/{len(all_scenes)} clips into final video...")
+            jobs[retry_job_id]["status_msg"] = "Assembling final video..."
+            bg = bg_music if bg_music and Path(bg_music).exists() else None
+            final = assemble_final_video(ordered_clips, project, bg)
+            jobs[retry_job_id]["output"] = final
+            jobs[retry_job_id]["status"] = "done" if still_failed == 0 else "partial_done"
+            jobs[retry_job_id]["status_msg"] = "Done!" if still_failed == 0 else f"Done ({still_failed} still failed)"
+            log(f"\n✅ COMPLETE! → {final}")
+
+        except Exception as e:
+            jobs[retry_job_id]["status"] = "error"
+            jobs[retry_job_id]["error"]  = str(e)
+            jobs[retry_job_id]["logs"]  += f"\n❌ FATAL: {e}"
+
+    threading.Thread(target=run_retry, daemon=True).start()
+    return jsonify({"job_id": retry_job_id, "retrying_scenes": failed_scenes_nums})
 
 
 @app.route("/upload_video", methods=["POST"])
