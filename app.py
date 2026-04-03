@@ -314,6 +314,9 @@ textarea{resize:vertical;min-height:100px;font-family:monospace;line-height:1.5}
       <label>OpenAI API Key</label>
       <input type="password" id="openai_key" placeholder="Pre-configured ✓ (leave blank)">
 
+      <label>ElevenLabs API Key <span style="color:#4aff6a;font-size:.68rem">(Ultra-realistic voices)</span></label>
+      <input type="password" id="elevenlabs_key" placeholder="Pre-configured ✓ (leave blank)" value="sk_e8ede427e79a39b9d92ff69e531f85dc568b0373211b1fa2">
+
       <label>Background Music (optional)</label>
       <input type="text" id="bg_music" placeholder="/path/to/music.mp3">
     </div>
@@ -991,6 +994,7 @@ async function proceedToGenerate() {
     style: document.getElementById('visual_style').value,
     fal_key: document.getElementById('fal_key').value,
     openai_key: document.getElementById('openai_key').value,
+    elevenlabs_key: document.getElementById('elevenlabs_key').value,
     bg_music: document.getElementById('bg_music').value,
     voice_map: getVoiceMap()
   };
@@ -1379,6 +1383,9 @@ def generate():
             os.environ["FAL_API_KEY"] = fal_key
         if oai_key:
             os.environ["OPENAI_API_KEY"] = oai_key
+        el_key = data.get("elevenlabs_key", "") or os.environ.get("ELEVENLABS_API_KEY", "")
+        if el_key:
+            os.environ["ELEVENLABS_API_KEY"] = el_key
 
         log_lines = []
         def log(msg):
