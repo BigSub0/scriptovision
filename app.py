@@ -440,6 +440,17 @@ You approve every scene before anything generates."></textarea>
             <button class="btn btn-secondary btn-sm" onclick="goToStep(2)">← Back to Scenes</button>
           </div>
         </div>
+
+        <!-- Reassemble box (shown when assembly fails but clips exist) -->
+        <div class="download-box" id="reassemble-box" style="display:none;background:#1a1a2e;border:2px dashed #e94560">
+          <div class="big-icon">🔧</div>
+          <h2 style="color:#e94560">Assembly Failed</h2>
+          <p style="color:#aaa">All scenes were generated successfully. Click below to re-assemble the final video from the existing clips — no regeneration needed.</p>
+          <button class="download-btn" style="background:#e94560" onclick="triggerReassemble()">🔄 Reassemble Video (30 sec)</button>
+          <div class="btn-row" style="justify-content:center;margin-top:14px">
+            <button class="btn btn-secondary btn-sm" onclick="startOver()">🔄 Start Over</button>
+          </div>
+        </div>
       </div>
 
     </div>
@@ -1104,6 +1115,11 @@ async function pollJob(jobId, totalScenes) {
         clearSavedJob();
         break;
       }
+      // Show reassemble box if all scenes done but job errored at assembly
+      if (data.status === 'error' && (data.scenes_done || 0) >= totalScenes) {
+        const rb = document.getElementById('reassemble-box');
+        if (rb) rb.style.display = 'block';
+      }
     } catch(e) {
       // Catch JSON parse errors and network errors gracefully
       console.warn('Poll error (retrying):', e);
@@ -1146,6 +1162,50 @@ function onJobDone(jobId) {
   setStep(5);
   notify('🎉 Your video is ready!');
   clearSavedJob();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// REASSEMBLE
+// ─────────────────────────────────────────────────────────────────────────────
+async function triggerReassemble() {
+  const rb = document.getElementById('reassemble-box');
+  if (rb) rb.innerHTML = '<div class="big-icon">⏳</div><h2 style="color:#e94560">Reassembling...</h2><p style="color:#aaa">Combining your existing clips into the final video. This takes about 30 seconds.</p>';
+
+  const projectName = document.getElementById('project_name')?.value || 'project';
+  const bgMusic     = document.getElementById('bg_music')?.value || '';
+
+  try {
+    const resp = await fetch('/reassemble', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ project_name: projectName, bg_music: bgMusic })
+    });
+    const data = await resp.json();
+    if (data.error) { notify(data.error, true); return; }
+
+    const jobId = data.job_id;
+    // Poll until done
+    while (true) {
+      await new Promise(r => setTimeout(r, 3000));
+      const sr = await fetch('/status/' + jobId);
+      const sd = await sr.json();
+      if (sd.status === 'done') {
+        if (rb) rb.style.display = 'none';
+        const db = document.getElementById('download-box');
+        if (db) db.style.display = 'block';
+        const dl = document.getElementById('download-link');
+        if (dl) dl.href = '/download/' + jobId;
+        setStep(5);
+        notify('🎉 Video reassembled! Ready to download.');
+        break;
+      } else if (sd.status === 'error') {
+        notify('Reassembly failed: ' + (sd.error || 'Unknown error') + ' — please regenerate.', true);
+        break;
+      }
+    }
+  } catch(e) {
+    notify('Reassembly error: ' + e, true);
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1574,6 +1634,72 @@ def download(job_id):
     if out and Path(out).exists():
         return send_file(out, as_attachment=True, download_name=Path(out).name)
     return jsonify({"error": "File not found"}), 404
+
+
+@app.route("/reassemble", methods=["POST"])
+def reassemble():
+    """
+    Re-run final assembly from already-generated clips in the temp folder.
+    Finds all *_cap.mp4 clips matching the project name and assembles them.
+    No image/audio/animation regeneration needed.
+    """
+    data         = request.json or {}
+    project_name = data.get("project_name", "project")
+    bg_music     = data.get("bg_music", "")
+
+    job_id = str(uuid.uuid4())[:8]
+    jobs[job_id] = {
+        "status": "running",
+        "logs": "Searching for existing clips...\n",
+        "scenes_done": 0,
+        "output": None,
+        "status_msg": "Finding clips...",
+        "scene_images": {}
+    }
+
+    def run_reassemble():
+        try:
+            import sys
+            sys.path.insert(0, str(_BASE))
+            from assembler import assemble_final_video, TEMP_DIR, OUTPUT_DIR
+
+            # Find all captioned clips for this project, sorted by scene number
+            pattern = f"{project_name}_clip_*_cap.mp4"
+            clips = sorted(TEMP_DIR.glob(pattern))
+
+            # Also try without project name prefix (fallback)
+            if not clips:
+                clips = sorted(TEMP_DIR.glob("*_clip_*_cap.mp4"))
+
+            if not clips:
+                jobs[job_id]["status"] = "error"
+                jobs[job_id]["error"]  = "No clips found in temp folder. Please regenerate."
+                jobs[job_id]["logs"]  += "\n\u274c No clips found. The server may have restarted and cleared temp files."
+                return
+
+            clip_paths = [str(c) for c in clips]
+            jobs[job_id]["logs"] += f"Found {len(clip_paths)} clips:\n"
+            for cp in clip_paths:
+                jobs[job_id]["logs"] += f"  \u2705 {Path(cp).name}\n"
+            jobs[job_id]["logs"] += "\n\U0001f517 Assembling final video...\n"
+            jobs[job_id]["status_msg"] = f"Assembling {len(clip_paths)} clips..."
+            jobs[job_id]["scenes_done"] = len(clip_paths)
+
+            bg = bg_music if bg_music and Path(bg_music).exists() else None
+            final = assemble_final_video(clip_paths, project_name, bg)
+
+            jobs[job_id]["output"]     = final
+            jobs[job_id]["status"]     = "done"
+            jobs[job_id]["status_msg"] = "Done!"
+            jobs[job_id]["logs"]      += f"\n\u2705 COMPLETE! \u2192 {final}"
+
+        except Exception as e:
+            jobs[job_id]["status"] = "error"
+            jobs[job_id]["error"]  = str(e)
+            jobs[job_id]["logs"]  += f"\n\u274c FATAL: {e}"
+
+    threading.Thread(target=run_reassemble, daemon=True).start()
+    return jsonify({"job_id": job_id})
 
 
 @app.route("/upload_video", methods=["POST"])
