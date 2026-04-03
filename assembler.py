@@ -350,7 +350,7 @@ def _mix_audio(video_path: str, audio_path: str, out_path: str, duration: int):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def add_subtitles_to_clip(clip_path: str, scene: dict, out_path: str) -> str:
-    """Burn dialogue subtitles into the video clip."""
+    """Burn clean, properly wrapped subtitles into the video clip."""
     dialogue  = scene.get("dialogue", [])
     voiceover = scene.get("voiceover", "")
     duration  = scene.get("duration", 6)
@@ -359,29 +359,68 @@ def add_subtitles_to_clip(clip_path: str, scene: dict, out_path: str) -> str:
         shutil.copy(clip_path, out_path)
         return out_path
 
-    lines = []
+    def wrap_text(text: str, max_chars: int = 48) -> list:
+        """Wrap text into lines of max_chars, breaking at word boundaries."""
+        words = text.split()
+        lines, current = [], ""
+        for word in words:
+            if len(current) + len(word) + 1 <= max_chars:
+                current = (current + " " + word).strip()
+            else:
+                if current:
+                    lines.append(current)
+                current = word
+        if current:
+            lines.append(current)
+        return lines[:2]  # max 2 lines per subtitle block
+
+    def safe(t: str) -> str:
+        """Escape text for ffmpeg drawtext filter."""
+        return (t.replace("'", "")
+                 .replace("\\", "")
+                 .replace(":", " ")
+                 .replace("%", "pct")
+                 .replace("[", "")
+                 .replace("]", "")
+                 .replace("(", "")
+                 .replace(")", ""))
+
+    # Build subtitle blocks — voiceover first, then dialogue (no speaker labels)
+    subtitle_lines = []
     if voiceover:
-        lines.append(voiceover[:80])
-    for d in dialogue[:2]:
-        lines.append(f"{d.get('speaker','')}: {d.get('line','')}"[:80])
+        subtitle_lines.extend(wrap_text(voiceover.strip()))
+    elif dialogue:
+        # Use first dialogue line only, strip speaker name
+        first_line = dialogue[0].get("line", "").strip()
+        subtitle_lines.extend(wrap_text(first_line))
 
-    def safe(t):
-        return t.replace("'", "").replace(":", " -").replace("%", "").replace("\\", "")
+    if not subtitle_lines:
+        shutil.copy(clip_path, out_path)
+        return out_path
 
+    # Position subtitles at bottom with proper spacing
+    # For 720p: bottom bar at ~660, lines at 620 and 645
     vf_parts = []
-    y_positions = [580, 620, 650]
-    for i, line in enumerate(lines[:3]):
-        y = y_positions[min(i, len(y_positions) - 1)]
+    base_y = 630 if len(subtitle_lines) == 1 else 610
+    line_spacing = 32
+
+    for i, line in enumerate(subtitle_lines):
+        y = base_y + (i * line_spacing)
+        safe_line = safe(line)
         vf_parts.append(
-            f"drawtext=text='{safe(line)}':fontsize=20:fontcolor=white:"
-            f"x=(w-text_w)/2:y={y}:box=1:boxcolor=black@0.6:boxborderw=5"
+            f"drawtext=text='{safe_line}'"
+            f":fontsize=22:fontcolor=white:font=DejaVu Sans Bold"
+            f":x=(w-text_w)/2:y={y}"
+            f":box=1:boxcolor=black@0.7:boxborderw=8"
         )
 
     vf = ",".join(vf_parts)
     cmd = ["ffmpeg", "-y", "-i", clip_path, "-vf", vf,
-           "-c:v", "libx264", "-c:a", "copy", out_path]
+           "-c:v", "libx264", "-preset", "fast", "-c:a", "copy", out_path]
     result = subprocess.run(cmd, capture_output=True)
     if result.returncode != 0:
+        # Fallback: copy without subtitles rather than crash
+        print(f"  ⚠️  Subtitle burn failed: {result.stderr.decode()[:200]}")
         shutil.copy(clip_path, out_path)
     return out_path
 
@@ -432,14 +471,77 @@ def assemble_final_video(clip_paths: list, project_name: str,
         for p in normalized:
             f.write(f"file '{p}'\n")
 
-    # Concatenate
+    # Concatenate with crossfade transitions between clips
     concat_path = TEMP_DIR / f"{project_name}_concat.mp4"
-    subprocess.run([
-        "ffmpeg", "-y", "-f", "concat", "-safe", "0",
-        "-i", str(list_file),
-        "-c:v", "libx264", "-c:a", "aac", "-movflags", "+faststart",
-        str(concat_path)
-    ], capture_output=True, check=True)
+    if len(normalized) == 1:
+        subprocess.run([
+            "ffmpeg", "-y", "-f", "concat", "-safe", "0",
+            "-i", str(list_file),
+            "-c:v", "libx264", "-c:a", "aac", "-movflags", "+faststart",
+            str(concat_path)
+        ], capture_output=True, check=True)
+    else:
+        # Build xfade filter chain for smooth crossfades
+        # Each clip is ~5-10s, crossfade at 0.5s
+        fade_dur = 0.4
+        try:
+            # Get durations of each clip
+            durations = []
+            for clip in normalized:
+                r = subprocess.run([
+                    "ffprobe", "-v", "error", "-show_entries", "format=duration",
+                    "-of", "default=noprint_wrappers=1:nokey=1", clip
+                ], capture_output=True, text=True)
+                try:
+                    durations.append(float(r.stdout.strip()))
+                except Exception:
+                    durations.append(6.0)
+
+            # Build xfade + acrossfade filter complex
+            inputs = []
+            for clip in normalized:
+                inputs += ["-i", clip]
+
+            # Build video xfade chain
+            vf_parts = []
+            af_parts = []
+            offset = 0.0
+            prev_v = "[0:v]"
+            prev_a = "[0:a]"
+
+            for i in range(1, len(normalized)):
+                offset += durations[i - 1] - fade_dur
+                out_v = f"[v{i}]" if i < len(normalized) - 1 else "[vout]"
+                out_a = f"[a{i}]" if i < len(normalized) - 1 else "[aout]"
+                vf_parts.append(
+                    f"{prev_v}[{i}:v]xfade=transition=fade:duration={fade_dur}:offset={offset:.3f}{out_v}"
+                )
+                af_parts.append(
+                    f"{prev_a}[{i}:a]acrossfade=d={fade_dur}{out_a}"
+                )
+                prev_v = out_v
+                prev_a = out_a
+
+            filter_complex = ";".join(vf_parts + af_parts)
+
+            cmd = ["ffmpeg", "-y"] + inputs + [
+                "-filter_complex", filter_complex,
+                "-map", "[vout]", "-map", "[aout]",
+                "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                "-c:a", "aac", "-movflags", "+faststart",
+                str(concat_path)
+            ]
+            result = subprocess.run(cmd, capture_output=True)
+            if result.returncode != 0:
+                raise RuntimeError("xfade failed, falling back to simple concat")
+        except Exception as e:
+            print(f"  ⚠️  Crossfade failed ({e}), using simple concat")
+            subprocess.run([
+                "ffmpeg", "-y", "-f", "concat", "-safe", "0",
+                "-i", str(list_file),
+                "-c:v", "libx264", "-c:a", "aac", "-movflags", "+faststart",
+                str(concat_path)
+            ], capture_output=True, check=True)
 
     # Mix background music if provided
     if bg_music_path and Path(bg_music_path).exists():

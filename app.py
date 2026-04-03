@@ -716,7 +716,8 @@ async function parseScript() {
       body: JSON.stringify({
         script,
         style: document.getElementById('visual_style').value,
-        openai_key: document.getElementById('openai_key').value
+        openai_key: document.getElementById('openai_key').value,
+        show_bible: showBible || null  // pass show bible for character consistency in Continue Series
       })
     });
     const data = await resp.json();
@@ -1335,17 +1336,33 @@ def index():
 def parse():
     """Parse script into scenes using GPT or demo parser."""
     data = request.json
-    script = data.get("script", "")
-    style  = data.get("style", "cinematic photorealistic")
-    key    = data.get("openai_key", "")
+    script     = data.get("script", "")
+    style      = data.get("style", "cinematic photorealistic")
+    key        = data.get("openai_key", "")
+    show_bible = data.get("show_bible", {})  # passed from Continue Series mode
 
     if key:
         os.environ["OPENAI_API_KEY"] = key
 
+    # Extract character references and visual style prompt from show bible
+    character_references = {}
+    visual_style_prompt  = None
+    if show_bible:
+        for c in show_bible.get("characters", []):
+            name = c.get("name", "").upper()
+            ref  = c.get("image_reference") or c.get("description", "")[:120]
+            if name and ref:
+                character_references[name] = ref
+        visual_style_prompt = show_bible.get("visual_style_prompt")
+
     try:
         from scene_parser import parse_script_to_scenes, parse_script_demo
         if os.environ.get("OPENAI_API_KEY"):
-            scenes = parse_script_to_scenes(script, style)
+            scenes = parse_script_to_scenes(
+                script, style,
+                character_references=character_references or None,
+                visual_style_prompt=visual_style_prompt
+            )
         else:
             scenes = parse_script_demo(script)
         for s in scenes:

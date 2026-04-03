@@ -54,17 +54,33 @@ Other rules:
 - Return ONLY a valid JSON array of scene objects, no other text
 """
 
-def parse_script_to_scenes(script_text: str, style: str = "cinematic photorealistic") -> list:
+def parse_script_to_scenes(script_text: str, style: str = "cinematic photorealistic",
+                           character_references: dict = None,
+                           visual_style_prompt: str = None) -> list:
     """
     Send the script to GPT and get back a structured list of scenes.
+    character_references: dict of {CHARACTER_NAME: image_reference_prompt}
+    visual_style_prompt: DALL-E prefix to enforce consistent style across all scenes
     """
-    user_prompt = f"""
-Visual style: {style}
+    # Build character consistency block if provided
+    char_block = ""
+    if character_references:
+        char_block = "\n\nCHARACTER VISUAL REFERENCES (MUST include in every scene image_prompt):\n"
+        for name, ref in character_references.items():
+            char_block += f"- {name}: {ref}\n"
+        char_block += "\nEVERY image_prompt MUST include the character's visual reference exactly as written above."
+
+    style_prefix = visual_style_prompt or style
+
+    user_prompt = f"""Visual style: {style}
+Style prefix for ALL image_prompts: \"{style_prefix}\"
+{char_block}
 
 SCRIPT:
 {script_text}
 
 Break this into video scenes. Return a JSON array of scene objects.
+Each image_prompt MUST start with \"{style_prefix}\" and include character visual references.
 """
     active_client = _get_client(os.environ.get("OPENAI_API_KEY", ""))
     response = active_client.chat.completions.create(
@@ -73,7 +89,7 @@ Break this into video scenes. Return a JSON array of scene objects.
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_prompt}
         ],
-        temperature=0.7,
+        temperature=0.6,
         max_tokens=4000
     )
 

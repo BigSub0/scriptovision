@@ -93,57 +93,97 @@ def extract_frames(video_path: str, num_frames: int = 8) -> list:
 def analyze_video_content(transcript: str, video_path: str,
                            show_title: str = "The Show") -> dict:
     """
-    Use GPT to analyze the transcript and build a 'show bible' —
-    characters, style, tone, story summary, episode structure.
+    Use GPT to analyze the transcript AND visual frames to build a 'show bible' —
+    characters (with locked visual descriptions), style, tone, story summary.
     """
     api_key = os.environ.get("OPENAI_API_KEY", "")
 
     if api_key:
-        return _gpt_analyze(transcript, show_title)
+        # Extract frames for visual analysis
+        frame_paths = []
+        try:
+            frame_paths = extract_frames(video_path, num_frames=6)
+        except Exception as e:
+            print(f"[ScriptoVision] Frame extraction failed: {e}")
+
+        return _gpt_analyze(transcript, show_title, frame_paths)
     else:
         return _demo_analyze(transcript, show_title)
 
 
-def _gpt_analyze(transcript: str, show_title: str) -> dict:
-    """Use GPT-4 to extract a full show bible from the transcript."""
+def _gpt_analyze(transcript: str, show_title: str, frame_paths: list = None) -> dict:
+    """Use GPT-4 Vision to extract a full show bible from transcript + visual frames."""
+    import base64
 
     system = """You are a professional TV show analyst and story bible creator.
-Analyze the provided transcript and extract a complete show bible as JSON with these fields:
+Analyze the provided transcript AND video frames to extract a complete show bible as JSON.
 
+CRITICAL: For each character, provide an extremely detailed visual description that can be
+used to generate CONSISTENT images of that character across all future episodes. Include:
+- Exact skin tone, hair color/style/length, facial features
+- Typical clothing style, colors, accessories
+- Body type, age range, distinguishing features
+- Art style (realistic, animated, cartoon, etc.)
+
+Return this exact JSON structure:
 {
   "show_title": "string",
-  "genre": "string (e.g. comedy, drama, animation, web series)",
-  "tone": "string (e.g. lighthearted, gritty, inspirational, comedic)",
-  "visual_style": "string (describe the look — animation style, cinematography, color palette)",
-  "setting": "string (where the show takes place)",
-  "episode_summary": "string (what happened in this episode, 3-5 sentences)",
-  "story_arc": "string (the bigger ongoing story across episodes)",
-  "cliffhanger": "string (how this episode ended or what was left unresolved)",
+  "genre": "string",
+  "tone": "string",
+  "visual_style": "string — be very specific: art style, color palette, lighting, cinematography",
+  "visual_style_prompt": "string — a DALL-E prompt prefix that enforces the visual style for every scene",
+  "setting": "string",
+  "episode_summary": "string (3-5 sentences)",
+  "story_arc": "string",
+  "cliffhanger": "string",
   "characters": [
     {
       "name": "string",
-      "role": "string (main/supporting/recurring)",
-      "description": "string (appearance, personality, speech style)",
-      "voice_style": "string (how they talk — accent, tone, catchphrases)",
-      "relationships": "string (how they relate to other characters)"
+      "role": "main/supporting/recurring",
+      "description": "string — DETAILED appearance for image generation consistency",
+      "image_reference": "string — DALL-E prompt snippet to include whenever this character appears",
+      "voice_style": "string",
+      "relationships": "string"
     }
   ],
-  "recurring_locations": ["list of places that appear in the show"],
-  "themes": ["list of recurring themes or messages"],
-  "episode_format": "string (typical episode structure, length, format)",
-  "next_episode_hook": "string (a compelling idea for the next episode based on the story so far)"
+  "recurring_locations": ["list"],
+  "themes": ["list"],
+  "episode_format": "string",
+  "next_episode_hook": "string"
 }
 
 Return ONLY valid JSON, no other text."""
 
+    # Build messages with visual frames if available
+    messages = [{"role": "system", "content": system}]
+
+    user_content = [{"type": "text",
+                     "text": f"Show title: {show_title}\n\nTranscript:\n{transcript[:4000]}"}]
+
+    # Attach up to 4 frames for visual analysis
+    if frame_paths:
+        for fp in frame_paths[:4]:
+            try:
+                with open(fp, "rb") as f:
+                    img_b64 = base64.b64encode(f.read()).decode()
+                user_content.append({
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/jpeg;base64,{img_b64}", "detail": "low"}
+                })
+            except Exception:
+                pass
+
+    if frame_paths:
+        user_content.append({"type": "text",
+                             "text": "Use the video frames above to lock the exact visual style and character appearances."})
+
+    messages.append({"role": "user", "content": user_content})
+
     response = client.chat.completions.create(
         model="gpt-4.1-mini",
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": f"Show title: {show_title}\n\nTranscript:\n{transcript[:6000]}"}
-        ],
-        temperature=0.5,
-        max_tokens=2000
+        messages=messages,
+        temperature=0.4,
+        max_tokens=2500
     )
 
     raw = response.choices[0].message.content.strip()
@@ -213,10 +253,20 @@ def _gpt_generate_episode(show_bible: dict, episode_number: int,
                            user_direction: str) -> str:
     """Use GPT to write the next episode script."""
 
+    # Build detailed character descriptions including image references for visual locking
     characters_desc = "\n".join([
-        f"- {c['name']} ({c['role']}): {c['description']}. Voice: {c['voice_style']}"
+        f"- {c['name']} ({c['role']}): {c['description']}. Voice: {c['voice_style']}."
+        f" Image reference: {c.get('image_reference', c['description'][:100])}"
         for c in show_bible.get("characters", [])
     ])
+
+    # Build character image reference map for scene parser injection
+    char_image_refs = {}
+    for c in show_bible.get("characters", []):
+        char_image_refs[c["name"].upper()] = c.get("image_reference", c.get("description", "")[:120])
+
+    visual_style_prompt = show_bible.get("visual_style_prompt",
+        f"{show_bible.get('visual_style', 'cinematic photorealistic')} style")
 
     system = f"""You are a professional TV writer for the show "{show_bible.get('show_title', 'The Show')}".
 
@@ -224,14 +274,21 @@ SHOW BIBLE:
 - Genre: {show_bible.get('genre', 'web series')}
 - Tone: {show_bible.get('tone', 'engaging')}
 - Visual Style: {show_bible.get('visual_style', 'cinematic')}
+- Visual Style Prompt: {visual_style_prompt}
 - Setting: {show_bible.get('setting', 'urban')}
 - Story Arc: {show_bible.get('story_arc', '')}
 - Previous Episode: {show_bible.get('episode_summary', '')}
 - Cliffhanger: {show_bible.get('cliffhanger', '')}
 - Themes: {', '.join(show_bible.get('themes', []))}
 
-CHARACTERS:
+CHARACTERS (use these EXACT descriptions in every scene image prompt for visual consistency):
 {characters_desc}
+
+CRITICAL IMAGE CONSISTENCY RULES:
+- Every scene's image_prompt MUST start with: "{visual_style_prompt}"
+- Every scene featuring a character MUST include their image_reference description verbatim
+- NEVER change a character's appearance between scenes
+- The visual style must be identical in every scene — same art style, color palette, lighting
 
 Write a complete script for Episode {episode_number}.
 Format it as a proper screenplay:

@@ -186,20 +186,20 @@ def select_animation_tool(scene: dict, provider_override: str = None) -> dict:
 def select_voice_tool(scene: dict, character: str = "NARRATOR") -> dict:
     """
     Auto-select the best TTS tool for a character/scene.
-    Returns a dict with: tool, voice_id, reason
+    Priority: ElevenLabs (ultra-realistic) > OpenAI TTS > gTTS > silent
     """
-    if _has_openai():
-        return {
-            "tool": "openai_tts",
-            "model": "tts-1",
-            "reason": "OpenAI TTS — best quality, tone-aware voice selection",
-            "fallback_chain": ["gtts", "silent"],
-        }
-    elif _has_elevenlabs():
+    if _has_elevenlabs():
         return {
             "tool": "elevenlabs",
             "model": "eleven_multilingual_v2",
-            "reason": "ElevenLabs — ultra-realistic voices",
+            "reason": "ElevenLabs — ultra-realistic, tone-aware voices (priority 1)",
+            "fallback_chain": ["openai_tts", "gtts", "silent"],
+        }
+    elif _has_openai():
+        return {
+            "tool": "openai_tts",
+            "model": "tts-1",
+            "reason": "OpenAI TTS — high quality, tone-aware voice selection",
             "fallback_chain": ["gtts", "silent"],
         }
     else:
@@ -297,7 +297,7 @@ def plan_project_tools(scenes: list, style: str = "cinematic photorealistic",
         "overall_summary": (
             f"{'DALL-E 3' if has_openai else 'Placeholder'} images | "
             f"{'Kling AI' if has_fal else 'Ken Burns demo'} animation | "
-            f"{'OpenAI TTS' if has_openai else 'gTTS'} voice"
+            f"{'ElevenLabs' if _has_elevenlabs() else ('OpenAI TTS' if has_openai else 'gTTS')} voice"
         )
     }
 
