@@ -25,6 +25,43 @@ for d in [UPLOAD_DIR, OUTPUT_DIR, TEMP_DIR, IMAGES_DIR, AUDIO_DIR]:
 
 jobs = {}   # job_id → {status, logs, scenes, output, scene_images, ...}
 
+# ── Auto-cleanup: remove temp/output files older than 2 hours on startup ──
+def _cleanup_old_files(max_age_hours: int = 2):
+    """Delete temp and output files older than max_age_hours to free Render disk space."""
+    import time
+    now = time.time()
+    cutoff = now - (max_age_hours * 3600)
+    cleaned_mb = 0
+    for folder in [TEMP_DIR, OUTPUT_DIR, IMAGES_DIR, AUDIO_DIR, UPLOAD_DIR]:
+        if not folder.exists():
+            continue
+        for f in folder.iterdir():
+            if f.is_file() and f.stat().st_mtime < cutoff:
+                try:
+                    size = f.stat().st_size
+                    f.unlink()
+                    cleaned_mb += size / (1024 * 1024)
+                except Exception:
+                    pass
+    if cleaned_mb > 0:
+        print(f"[Startup Cleanup] Freed {cleaned_mb:.1f} MB of old files")
+    return cleaned_mb
+
+# Run cleanup on startup
+_cleanup_old_files(max_age_hours=2)
+
+# Schedule periodic cleanup every 30 minutes
+def _schedule_cleanup():
+    import threading, time
+    def _loop():
+        while True:
+            time.sleep(1800)  # 30 minutes
+            _cleanup_old_files(max_age_hours=2)
+    t = threading.Thread(target=_loop, daemon=True)
+    t.start()
+
+_schedule_cleanup()
+
 # ── API keys loaded from environment variables (set on Render/Railway) ──
 os.environ["ANIMATION_PROVIDER"] = os.environ.get("ANIMATION_PROVIDER", "kling")
 # Pre-load API keys so tool_router sees them from the first request
@@ -1862,6 +1899,40 @@ def download(job_id):
     if out and Path(out).exists():
         return send_file(out, as_attachment=True, download_name=Path(out).name)
     return jsonify({"error": "File not found"}), 404
+
+
+@app.route("/storage-status")
+def storage_status():
+    """Returns current disk usage and temp file stats."""
+    import shutil as _shutil, time
+    total, used, free = _shutil.disk_usage("/")
+    def folder_size(p):
+        if not p.exists(): return 0
+        return sum(f.stat().st_size for f in p.iterdir() if f.is_file())
+    temp_mb   = folder_size(TEMP_DIR)   / (1024*1024)
+    output_mb = folder_size(OUTPUT_DIR) / (1024*1024)
+    audio_mb  = folder_size(AUDIO_DIR)  / (1024*1024)
+    images_mb = folder_size(IMAGES_DIR) / (1024*1024)
+    upload_mb = folder_size(UPLOAD_DIR) / (1024*1024)
+    return jsonify({
+        "disk_total_gb":  round(total  / (1024**3), 1),
+        "disk_used_gb":   round(used   / (1024**3), 1),
+        "disk_free_gb":   round(free   / (1024**3), 1),
+        "disk_used_pct":  round(used / total * 100, 1),
+        "temp_mb":        round(temp_mb, 1),
+        "output_mb":      round(output_mb, 1),
+        "audio_mb":       round(audio_mb, 1),
+        "images_mb":      round(images_mb, 1),
+        "upload_mb":      round(upload_mb, 1),
+        "total_app_mb":   round(temp_mb + output_mb + audio_mb + images_mb + upload_mb, 1)
+    })
+
+
+@app.route("/cleanup", methods=["POST"])
+def manual_cleanup():
+    """Manually trigger cleanup of old files."""
+    freed = _cleanup_old_files(max_age_hours=0)  # clean everything
+    return jsonify({"freed_mb": round(freed, 1), "status": "cleaned"})
 
 
 @app.route("/reassemble", methods=["POST"])
