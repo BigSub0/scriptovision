@@ -299,6 +299,16 @@ def generate_audio_for_scene(scene: dict, project_name: str,
 
 def _generate_tts(text: str, character: str, output_path: str,
                   voice_map: dict = None, override_voice: str = None):
+    # Priority 1: ElevenLabs — ultra-realistic voices
+    el_key = os.environ.get("ELEVENLABS_API_KEY", "")
+    if el_key:
+        try:
+            _elevenlabs_tts(text, character, output_path,
+                            voice_map=voice_map, override_voice=override_voice)
+            return
+        except Exception as e:
+            print(f"[TTS] ElevenLabs failed for {character}: {e} — falling back to OpenAI")
+    # Priority 2: OpenAI TTS
     api_key = os.environ.get("OPENAI_API_KEY", "")
     if api_key and not api_key.startswith("sk-demo"):
         try:
@@ -307,7 +317,51 @@ def _generate_tts(text: str, character: str, output_path: str,
             return
         except Exception as e:
             print(f"[TTS] OpenAI TTS failed for {character}: {e}")
+    # Priority 3: gTTS / silent fallback
     _espeak_tts(text, output_path)
+
+
+# ElevenLabs voice map — maps OpenAI voice names to closest ElevenLabs voice IDs
+# These are the default ElevenLabs pre-made voices (no custom voice needed)
+ELEVENLABS_VOICE_MAP = {
+    "onyx":    "TX3LPaxmHKxFdv7VOQHJ",  # Liam — deep, authoritative male
+    "echo":    "nPczCjzI2devNBz1zQrb",  # Brian — clear, conversational male
+    "fable":   "onwK4e9ZLuTAKqWW03F9",  # Daniel — expressive, British storyteller
+    "nova":    "EXAVITQu4vr4xnSDxMaL",  # Sarah — warm, natural female
+    "shimmer": "XB0fDUnXU5powFXDhCwa",  # Charlotte — light, youthful female
+    "alloy":   "pFZP5JQG7iQjIQuC4Bku",  # Lily — neutral, versatile
+}
+
+def _elevenlabs_tts(text: str, character: str, output_path: str,
+                    voice_map: dict = None, override_voice: str = None):
+    """Generate TTS using ElevenLabs API — ultra-realistic voices."""
+    import requests as _req
+    el_key = os.environ.get("ELEVENLABS_API_KEY", "")
+    # Get the OpenAI voice name first (for tone-aware selection)
+    oai_voice = override_voice or get_voice_for_character(character, voice_map=voice_map)
+    # Map to ElevenLabs voice ID
+    el_voice_id = ELEVENLABS_VOICE_MAP.get(oai_voice, ELEVENLABS_VOICE_MAP["onyx"])
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{el_voice_id}"
+    headers = {
+        "xi-api-key": el_key,
+        "Content-Type": "application/json",
+        "Accept": "audio/mpeg"
+    }
+    payload = {
+        "text": text[:5000],
+        "model_id": "eleven_multilingual_v2",
+        "voice_settings": {
+            "stability": 0.5,
+            "similarity_boost": 0.75,
+            "style": 0.4,
+            "use_speaker_boost": True
+        }
+    }
+    resp = _req.post(url, json=payload, headers=headers, timeout=60)
+    resp.raise_for_status()
+    with open(output_path, "wb") as f:
+        f.write(resp.content)
+    print(f"[TTS/EL] {character:12s} → voice:{oai_voice:7s} (ElevenLabs) | {text[:55]}...")
 
 
 def _openai_tts(text: str, character: str, output_path: str,
