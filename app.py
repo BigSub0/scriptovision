@@ -1090,16 +1090,25 @@ async function pollJob(jobId, totalScenes) {
         break;
       } else if (data.status === 'error') {
         const el = document.getElementById('log-output');
-        if (el) el.textContent += '\n\n❌ ERROR: ' + (data.error || 'Unknown error');
+        if (el) el.textContent += '\n\n\u274c ERROR: ' + (data.error || 'Unknown error');
         const pd = document.getElementById('pulse-dot');
         if (pd) pd.style.background = '#e94560';
         notify('Generation failed: ' + (data.error || 'Unknown'), true);
         clearSavedJob();
         break;
+      } else if (data.status === 'not_found') {
+        // Server restarted or wrong worker — show clear message
+        const el = document.getElementById('log-output');
+        if (el) el.textContent += '\n\n\u26a0\ufe0f Server restarted. Your job is no longer in memory. Please regenerate.';
+        notify('Server restarted — please regenerate your video.', true);
+        clearSavedJob();
+        break;
       }
     } catch(e) {
+      // Catch JSON parse errors and network errors gracefully
+      console.warn('Poll error (retrying):', e);
       const el = document.getElementById('log-output');
-      if (el) el.textContent += '\nPoll error (retrying): ' + e;
+      if (el) el.textContent += '\nConnection hiccup, retrying...';
     }
   }
 }
@@ -1504,7 +1513,19 @@ def generate():
 
 @app.route("/status/<job_id>")
 def status(job_id):
-    return jsonify(jobs.get(job_id, {"status": "not_found"}))
+    job = jobs.get(job_id)
+    if job is None:
+        # Job not found — could be server restart or wrong worker
+        # Return a safe response that won't crash the frontend
+        return jsonify({
+            "status": "not_found",
+            "logs": "Job not found. The server may have restarted. Please regenerate.",
+            "scenes_done": 0,
+            "status_msg": "Job not found",
+            "output": None,
+            "scene_images": {}
+        })
+    return jsonify(job)
 
 
 @app.route("/tool_plan", methods=["POST"])
