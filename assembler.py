@@ -187,16 +187,38 @@ def animate_scene(scene: dict, image_path: str, audio_path: str,
             return out_path
 
     if fal_key and provider != "demo":
-        # Always use Kling AI animation — no Ken Burns fallback when key is present
-        return _kling_animate(
-            image_path=image_path,
-            motion_prompt=motion,
-            duration=kling_duration,
-            audio_path=audio_path,
-            out_path=out_path,
-            fal_key=fal_key,
-            provider=provider
-        )
+        # Try Kling first, then Minimax as fallback if balance exhausted or 403
+        try:
+            return _kling_animate(
+                image_path=image_path,
+                motion_prompt=motion,
+                duration=kling_duration,
+                audio_path=audio_path,
+                out_path=out_path,
+                fal_key=fal_key,
+                provider=provider
+            )
+        except Exception as e:
+            err_str = str(e)
+            # Detect balance exhaustion or auth issues — try Minimax as fallback
+            if "403" in err_str or "Exhausted balance" in err_str or "locked" in err_str or "Forbidden" in err_str:
+                print(f"  ⚠️  Fal.ai Kling failed (403/balance): {err_str[:80]}")
+                print(f"  🔄 Switching to Minimax animation as fallback...")
+                try:
+                    return _minimax_animate(
+                        image_path=image_path,
+                        motion_prompt=motion,
+                        audio_path=audio_path,
+                        out_path=out_path,
+                        fal_key=fal_key,
+                        duration=int(kling_duration)
+                    )
+                except Exception as me:
+                    print(f"  ⚠️  Minimax also failed: {me}")
+                    print(f"  🔄 Using Ken Burns as last resort...")
+                    return _ken_burns_fallback(scene, image_path, audio_path, duration, out_path)
+            else:
+                raise  # Re-raise non-balance errors
     else:
         # Only use Ken Burns if explicitly in demo mode (no API key)
         print(f"  ⚠️  No Fal.ai key found — using demo mode. Add your Fal.ai key for real AI animation.")
@@ -267,6 +289,49 @@ def _kling_animate(image_path: str, motion_prompt: str, duration: str,
 
     # Step 7: Mix in audio
     _mix_audio(raw_path, audio_path, out_path, int(duration) if duration.isdigit() else 5)
+    Path(raw_path).unlink(missing_ok=True)
+    return out_path
+
+
+def _minimax_animate(image_path: str, motion_prompt: str, audio_path: str,
+                     out_path: str, fal_key: str, duration: int = 5) -> str:
+    """
+    Minimax image-to-video animation via Fal.ai as fallback when Kling is unavailable.
+    Uses fal-ai/minimax-video model.
+    """
+    import os, requests
+    model_id = "fal-ai/minimax-video/image-to-video"
+    print(f"    📤 Uploading image for Minimax...")
+    image_url = _fal_upload_image(image_path, fal_key)
+
+    payload = {
+        "image_url": image_url,
+        "prompt": motion_prompt,
+        "prompt_optimizer": True
+    }
+
+    print(f"    🎬 Submitting to Minimax...")
+    job = _fal_submit_job(model_id, payload, fal_key)
+    request_id = job["request_id"]
+    status_url  = job["status_url"]
+    response_url = job["response_url"]
+    print(f"    ⏳ Minimax job {request_id[:8]}... queued")
+
+    result = _fal_poll_job(status_url, response_url, request_id, fal_key,
+                           max_wait=600, poll_interval=15)
+
+    video_url = (
+        result.get("video", {}).get("url") or
+        result.get("url") or
+        (result.get("videos") or [{}])[0].get("url")
+    )
+    if not video_url:
+        raise ValueError(f"No video URL in Minimax result: {list(result.keys())}")
+
+    print(f"    ✅ Minimax animation complete! Downloading...")
+    raw_path = out_path.replace(".mp4", "_raw.mp4")
+    _fal_download_video(video_url, raw_path)
+    _mix_audio(raw_path, audio_path, out_path, duration)
     Path(raw_path).unlink(missing_ok=True)
     return out_path
 
