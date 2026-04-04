@@ -15,16 +15,23 @@ app = Flask(__name__)
 
 # Use environment variable BASE_DIR for cloud, fallback to local path
 _BASE = Path(os.environ.get("BASE_DIR", "/home/ubuntu/scriptovision"))
-UPLOAD_DIR = _BASE / "uploads"
-OUTPUT_DIR = _BASE / "output"
-TEMP_DIR   = _BASE / "temp"
-IMAGES_DIR = _BASE / "images"
-AUDIO_DIR  = _BASE / "audio"
+
+# Use /data persistent disk on Render Pro if env vars are set
+# These directories survive server restarts on Render's persistent disk
+_DATA = Path(os.environ.get("JOBS_DIR", str(_BASE / "jobs"))).parent  # /data or _BASE
+UPLOAD_DIR = Path(os.environ.get("TEMP_DIR",   str(_BASE / "uploads")))
+OUTPUT_DIR = Path(os.environ.get("OUTPUT_DIR", str(_BASE / "output")))
+TEMP_DIR   = Path(os.environ.get("TEMP_DIR",   str(_BASE / "temp")))
+IMAGES_DIR = _BASE / "images"  # ephemeral OK — regenerated each run
+AUDIO_DIR  = _BASE / "audio"   # ephemeral OK — regenerated each run
 for d in [UPLOAD_DIR, OUTPUT_DIR, TEMP_DIR, IMAGES_DIR, AUDIO_DIR]:
     d.mkdir(parents=True, exist_ok=True)
 
-JOBS_DIR = _BASE / "jobs"
+# JOBS_DIR on persistent disk — survives Render restarts
+JOBS_DIR = Path(os.environ.get("JOBS_DIR", str(_BASE / "jobs")))
 JOBS_DIR.mkdir(parents=True, exist_ok=True)
+print(f"[ScriptoVision] JOBS_DIR = {JOBS_DIR} (persistent: {str(JOBS_DIR).startswith('/data')})")
+print(f"[ScriptoVision] OUTPUT_DIR = {OUTPUT_DIR}")
 
 # ── Disk-backed job store — survives server restarts ──
 class JobStore:
