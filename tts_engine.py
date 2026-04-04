@@ -187,6 +187,7 @@ def get_voice_for_character(character_name: str, line_text: str = "",
                              scene_mood: str = "", voice_map: dict = None) -> str:
     """
     Multi-level tone-aware voice selection:
+    0. Character Bible (HIGHEST PRIORITY — locked voice per character)
     1. User voice_map override
     2. Named character override
     3. Dialogue tone inference from line text
@@ -194,6 +195,26 @@ def get_voice_for_character(character_name: str, line_text: str = "",
     5. Default: alloy
     """
     name_lower = (character_name or "").lower().strip()
+
+    # 0. Character Bible — absolute priority, locked voice per character
+    try:
+        from character_bible import get_voice_name_for_character
+        bible_voice = get_voice_name_for_character(character_name)
+        if bible_voice:
+            # Bible stores ElevenLabs voice names — map to OpenAI names for compatibility
+            # (ElevenLabs is used directly in _elevenlabs_tts via voice_id)
+            el_to_oai = {
+                "liam": "onyx", "brian": "echo", "daniel": "fable",
+                "adam": "onyx", "charlie": "echo", "george": "echo",
+                "callum": "onyx", "clyde": "echo", "dave": "echo",
+                "fin": "echo", "sarah": "nova", "charlotte": "shimmer",
+                "lily": "alloy", "rachel": "nova", "domi": "nova",
+                "bella": "nova", "elli": "shimmer", "grace": "nova",
+                "jessica": "nova", "matilda": "nova",
+            }
+            return el_to_oai.get(bible_voice, "alloy")
+    except Exception:
+        pass
 
     # 1. User-provided override
     if voice_map:
@@ -337,10 +358,20 @@ def _elevenlabs_tts(text: str, character: str, output_path: str,
     """Generate TTS using ElevenLabs API — ultra-realistic voices."""
     import requests as _req
     el_key = os.environ.get("ELEVENLABS_API_KEY", "")
-    # Get the OpenAI voice name first (for tone-aware selection)
-    oai_voice = override_voice or get_voice_for_character(character, voice_map=voice_map)
-    # Map to ElevenLabs voice ID
-    el_voice_id = ELEVENLABS_VOICE_MAP.get(oai_voice, ELEVENLABS_VOICE_MAP["onyx"])
+    
+    # PRIORITY 0: Character Bible — use locked voice ID directly
+    try:
+        from character_bible import get_voice_id_for_character
+        bible_voice_id = get_voice_id_for_character(character)
+        if bible_voice_id:
+            el_voice_id = bible_voice_id
+            oai_voice = "bible"
+        else:
+            raise ValueError("not in bible")
+    except Exception:
+        # Fall back to tone-based selection
+        oai_voice = override_voice or get_voice_for_character(character, voice_map=voice_map)
+        el_voice_id = ELEVENLABS_VOICE_MAP.get(oai_voice, ELEVENLABS_VOICE_MAP["onyx"])
     url = f"https://api.elevenlabs.io/v1/text-to-speech/{el_voice_id}"
     headers = {
         "xi-api-key": el_key,

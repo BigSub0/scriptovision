@@ -570,10 +570,68 @@ textarea{resize:vertical;min-height:100px;font-family:monospace;line-height:1.5}
 
     <!-- VOICE MAP -->
     <div class="card" id="voice-map-card" style="display:none">
-      <div class="card-title">🎙️ Voice Assignments</div>
+      <div class="card-title">🎤 Voice Assignments</div>
       <div id="voice-map-rows"></div>
       <div style="font-size:.72rem;color:#444;margin-top:6px">
         onyx · echo · nova · shimmer · alloy · fable
+      </div>
+    </div>
+
+    <!-- CHARACTER BIBLE -->
+    <div class="card" id="char-bible-card">
+      <div class="card-title">📖 Character Bible
+        <span style="font-size:.65rem;color:#4aff6a;font-weight:400;margin-left:6px">Locked faces &amp; voices</span>
+      </div>
+      <div style="font-size:.72rem;color:#888;margin-bottom:8px">Define characters once. Their face and voice stay the same in every video forever.</div>
+      <div id="bible-list" style="margin-bottom:8px"></div>
+      <button class="btn btn-secondary btn-sm" onclick="showAddCharacter()" style="width:100%">➕ Add Character</button>
+
+      <!-- Add Character Form (hidden by default) -->
+      <div id="add-char-form" style="display:none;margin-top:10px;border-top:1px solid #333;padding-top:10px">
+        <label style="font-size:.72rem">Character Name (e.g. AMANI)</label>
+        <input type="text" id="char-name" placeholder="AMANI" style="margin-bottom:6px">
+
+        <label style="font-size:.72rem">Face Description (locked forever)</label>
+        <textarea id="char-face" rows="3" placeholder="Black woman, early 30s, natural afro hair, high cheekbones, full lips, warm brown skin, athletic build" style="width:100%;background:#1a1a1a;color:#fff;border:1px solid #333;border-radius:6px;padding:6px;font-size:.72rem;resize:vertical;margin-bottom:6px"></textarea>
+
+        <label style="font-size:.72rem">Voice</label>
+        <select id="char-voice" style="margin-bottom:6px">
+          <optgroup label="Male Voices">
+            <option value="liam">Liam — Deep &amp; Authoritative</option>
+            <option value="brian">Brian — Clear, Conversational</option>
+            <option value="charlie">Charlie — Natural, Casual</option>
+            <option value="callum">Callum — Intense, American</option>
+            <option value="adam">Adam — Deep American</option>
+            <option value="george">George — Warm British</option>
+            <option value="clyde">Clyde — Middle-aged American</option>
+            <option value="dave">Dave — British Casual</option>
+            <option value="fin">Fin — Irish Calm</option>
+            <option value="daniel">Daniel — Expressive British</option>
+          </optgroup>
+          <optgroup label="Female Voices">
+            <option value="sarah">Sarah — Warm, Natural</option>
+            <option value="charlotte">Charlotte — Light, Youthful</option>
+            <option value="rachel">Rachel — Calm American</option>
+            <option value="jessica">Jessica — Expressive American</option>
+            <option value="matilda">Matilda — Warm American</option>
+            <option value="grace">Grace — Southern American</option>
+            <option value="domi">Domi — Strong American</option>
+            <option value="elli">Elli — Young American</option>
+            <option value="lily">Lily — Neutral Versatile</option>
+          </optgroup>
+        </select>
+
+        <label style="font-size:.72rem">Gender</label>
+        <select id="char-gender" style="margin-bottom:8px">
+          <option value="male">Male</option>
+          <option value="female">Female</option>
+        </select>
+
+        <div style="display:flex;gap:6px">
+          <button class="btn btn-primary btn-sm" onclick="saveCharacter()" style="flex:1">💾 Save Character</button>
+          <button class="btn btn-secondary btn-sm" onclick="cancelAddCharacter()" style="flex:1">✕ Cancel</button>
+        </div>
+        <div id="char-save-msg" style="font-size:.7rem;color:#4aff6a;margin-top:4px"></div>
       </div>
     </div>
 
@@ -1213,6 +1271,100 @@ function getVoiceMap() {
   });
   return map;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CHARACTER BIBLE
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function loadBible() {
+  try {
+    const resp = await fetch('/character-bible');
+    const data = await resp.json();
+    renderBibleList(data.characters || {});
+  } catch(e) {
+    console.log('Bible load error:', e);
+  }
+}
+
+function renderBibleList(characters) {
+  const el = document.getElementById('bible-list');
+  if (!el) return;
+  const names = Object.keys(characters);
+  if (names.length === 0) {
+    el.innerHTML = '<div style="font-size:.7rem;color:#555;font-style:italic">No characters defined yet.</div>';
+    return;
+  }
+  el.innerHTML = names.map(name => {
+    const c = characters[name];
+    const genderIcon = c.gender === 'female' ? '👩' : '👨';
+    return `<div style="display:flex;align-items:center;justify-content:space-between;padding:5px 0;border-bottom:1px solid #222;font-size:.72rem">
+      <div>
+        <span style="color:#fff;font-weight:600">${genderIcon} ${name}</span>
+        <span style="color:#888;margin-left:6px">${c.voice_name}</span>
+        <div style="color:#555;font-size:.65rem;margin-top:2px">${(c.face_seed||'').substring(0,60)}...</div>
+      </div>
+      <button onclick="deleteCharacter('${name}')" style="background:none;border:none;color:#f55;cursor:pointer;font-size:.8rem;padding:2px 6px">✕</button>
+    </div>`;
+  }).join('');
+}
+
+function showAddCharacter() {
+  document.getElementById('add-char-form').style.display = 'block';
+  document.getElementById('char-name').focus();
+}
+
+function cancelAddCharacter() {
+  document.getElementById('add-char-form').style.display = 'none';
+  document.getElementById('char-name').value = '';
+  document.getElementById('char-face').value = '';
+  document.getElementById('char-save-msg').textContent = '';
+}
+
+async function saveCharacter() {
+  const name = document.getElementById('char-name').value.trim().toUpperCase();
+  const face = document.getElementById('char-face').value.trim();
+  const voice = document.getElementById('char-voice').value;
+  const gender = document.getElementById('char-gender').value;
+  const msgEl = document.getElementById('char-save-msg');
+
+  if (!name || !face) {
+    msgEl.style.color = '#f55';
+    msgEl.textContent = 'Name and face description are required.';
+    return;
+  }
+
+  try {
+    const resp = await fetch('/character-bible', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name, face_seed: face, voice_name: voice, gender})
+    });
+    const data = await resp.json();
+    if (data.ok) {
+      msgEl.style.color = '#4aff6a';
+      msgEl.textContent = `✅ ${name} saved!`;
+      cancelAddCharacter();
+      loadBible();
+    } else {
+      msgEl.style.color = '#f55';
+      msgEl.textContent = data.error || 'Save failed';
+    }
+  } catch(e) {
+    msgEl.style.color = '#f55';
+    msgEl.textContent = 'Error: ' + e;
+  }
+}
+
+async function deleteCharacter(name) {
+  if (!confirm(`Remove ${name} from the Character Bible?`)) return;
+  try {
+    await fetch('/character-bible/' + encodeURIComponent(name), {method: 'DELETE'});
+    loadBible();
+  } catch(e) { console.log('Delete error:', e); }
+}
+
+// Load bible on page load
+window.addEventListener('load', loadBible);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GENERATION STRIP
@@ -2566,6 +2718,58 @@ def regenerate_script():
         return jsonify({"script": script})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CHARACTER BIBLE API
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.route("/character-bible", methods=["GET"])
+def get_character_bible():
+    """Return all characters in the bible."""
+    try:
+        import sys
+        sys.path.insert(0, str(_BASE))
+        from character_bible import get_all_characters
+        return jsonify({"characters": get_all_characters()})
+    except Exception as e:
+        return jsonify({"characters": {}, "error": str(e)})
+
+
+@app.route("/character-bible", methods=["POST"])
+def add_character_to_bible():
+    """Add or update a character in the bible."""
+    try:
+        import sys
+        sys.path.insert(0, str(_BASE))
+        from character_bible import add_character
+        data = request.json
+        name      = data.get("name", "").strip().upper()
+        face_seed = data.get("face_seed", "").strip()
+        voice_name = data.get("voice_name", "liam")
+        gender    = data.get("gender", "male")
+        description = data.get("description", "")
+        if not name or not face_seed:
+            return jsonify({"ok": False, "error": "name and face_seed required"}), 400
+        char = add_character(name, face_seed, voice_name, gender, description)
+        print(f"[CharBible] Added/updated character: {name} | voice:{voice_name}")
+        return jsonify({"ok": True, "character": char})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/character-bible/<name>", methods=["DELETE"])
+def delete_character_from_bible(name):
+    """Remove a character from the bible."""
+    try:
+        import sys
+        sys.path.insert(0, str(_BASE))
+        from character_bible import delete_character
+        delete_character(name)
+        print(f"[CharBible] Deleted character: {name}")
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 if __name__ == "__main__":

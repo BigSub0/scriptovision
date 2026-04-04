@@ -72,7 +72,23 @@ def parse_script_to_scenes(script_text: str, style: str = "cinematic photorealis
     Send the script to GPT and get back a structured list of scenes.
     character_references: dict of {CHARACTER_NAME: image_reference_prompt}
     visual_style_prompt: DALL-E prefix to enforce consistent style across all scenes
-    """
+    
+    Auto-merges character_references with the persistent character bible so
+    bible characters are ALWAYS included even if caller doesn't pass them.
+    """    
+    # Auto-load character bible and merge with any passed-in references
+    try:
+        from character_bible import build_character_references_from_bible
+        bible_refs = build_character_references_from_bible()
+    except Exception:
+        bible_refs = {}
+    
+    # Merge: bible takes precedence for face seeds, caller refs fill in the rest
+    merged_refs = {}
+    if character_references:
+        merged_refs.update(character_references)
+    merged_refs.update(bible_refs)  # Bible always wins
+    character_references = merged_refs if merged_refs else None
     # Build character consistency block if provided
     char_block = ""
     if character_references:
@@ -116,6 +132,19 @@ Each image_prompt MUST:
     raw = re.sub(r"\s*```$", "", raw)
 
     scenes = json.loads(raw)
+    
+    # Post-process: inject face seeds for any character GPT missed
+    try:
+        from character_bible import inject_face_seeds_into_prompt
+        for scene in scenes:
+            chars = scene.get("characters", [])
+            if chars and scene.get("image_prompt"):
+                scene["image_prompt"] = inject_face_seeds_into_prompt(
+                    scene["image_prompt"], chars
+                )
+    except Exception:
+        pass  # Never crash the pipeline over this
+    
     return scenes
 
 
