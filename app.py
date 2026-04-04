@@ -23,7 +23,83 @@ AUDIO_DIR  = _BASE / "audio"
 for d in [UPLOAD_DIR, OUTPUT_DIR, TEMP_DIR, IMAGES_DIR, AUDIO_DIR]:
     d.mkdir(parents=True, exist_ok=True)
 
-jobs = {}   # job_id → {status, logs, scenes, output, scene_images, ...}
+JOBS_DIR = _BASE / "jobs"
+JOBS_DIR.mkdir(parents=True, exist_ok=True)
+
+# ── Disk-backed job store — survives server restarts ──
+class JobStore:
+    """
+    Persists job state to disk as JSON files in JOBS_DIR.
+    Falls back gracefully if a file is corrupted or missing.
+    """
+    def __init__(self, jobs_dir: Path):
+        self._dir = jobs_dir
+        self._lock = threading.Lock()
+
+    def _path(self, job_id: str) -> Path:
+        return self._dir / f"{job_id}.json"
+
+    def _safe_fields(self, data: dict) -> dict:
+        """Strip non-serializable fields before writing."""
+        skip = {"_thread"}
+        return {k: v for k, v in data.items() if k not in skip}
+
+    def __setitem__(self, job_id: str, value: dict):
+        with self._lock:
+            try:
+                self._path(job_id).write_text(
+                    json.dumps(self._safe_fields(value), default=str), encoding="utf-8"
+                )
+            except Exception as e:
+                print(f"[JobStore] Write error for {job_id}: {e}")
+
+    def __getitem__(self, job_id: str) -> dict:
+        try:
+            return json.loads(self._path(job_id).read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            raise KeyError(job_id)
+        except Exception:
+            raise KeyError(job_id)
+
+    def get(self, job_id: str, default=None):
+        try:
+            return self[job_id]
+        except KeyError:
+            return default
+
+    def update_field(self, job_id: str, key: str, value):
+        """Atomically update a single field in an existing job."""
+        with self._lock:
+            try:
+                p = self._path(job_id)
+                data = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+                data[key] = value
+                p.write_text(json.dumps(self._safe_fields(data), default=str), encoding="utf-8")
+            except Exception as e:
+                print(f"[JobStore] Field update error for {job_id}.{key}: {e}")
+
+    def append_log(self, job_id: str, text: str):
+        """Append to the logs field without rewriting the whole file."""
+        with self._lock:
+            try:
+                p = self._path(job_id)
+                data = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+                existing = data.get("logs", "")
+                lines = existing.split("\n")
+                lines.append(text)
+                data["logs"] = "\n".join(lines[-150:])
+                p.write_text(json.dumps(self._safe_fields(data), default=str), encoding="utf-8")
+            except Exception as e:
+                print(f"[JobStore] Log append error for {job_id}: {e}")
+
+    def __contains__(self, job_id: str):
+        return self._path(job_id).exists()
+
+    def keys(self):
+        return [p.stem for p in self._dir.glob("*.json")]
+
+
+jobs = JobStore(JOBS_DIR)
 
 # ── Auto-cleanup: remove temp/output files older than 2 hours on startup ──
 def _cleanup_old_files(max_age_hours: int = 2):
@@ -1660,7 +1736,7 @@ def generate():
         log_lines = []
         def log(msg):
             log_lines.append(msg)
-            jobs[job_id]["logs"] = "\n".join(log_lines[-120:])
+            jobs.update_field(job_id, "logs", "\n".join(log_lines[-120:]))
 
         try:
             import sys
@@ -1681,7 +1757,7 @@ def generate():
                 breakdown = ', '.join(f"{k}: {v} scene(s)" for k,v in tool_plan['animation_breakdown'].items())
                 log(f"   Animation:   {breakdown}")
             log("")
-            jobs[job_id]["tool_plan"] = tool_plan
+            jobs.update_field(job_id, "tool_plan", tool_plan)
 
             # Use router's animation provider if user selected 'auto'
             effective_provider = provider
@@ -1695,13 +1771,17 @@ def generate():
                 sn    = scene.get("scene_number", i + 1)
                 title = scene.get("title", f"Scene {sn}")
                 log(f"[{sn}/{len(scenes)}] 🖼️  Generating image: {title}")
-                jobs[job_id]["status_msg"] = f"Scene {sn}/{len(scenes)} — generating image..."
+                jobs.update_field(job_id, "status_msg", f"Scene {sn}/{len(scenes)} — generating image...")
 
                 # Image
                 try:
                     img_path = generate_image(scene, project, style=style)
                     scene["_image_path"] = img_path
-                    jobs[job_id]["scene_images"][str(sn)] = img_path
+                    # Update scene_images dict on disk
+                    current_job = jobs.get(job_id, {})
+                    si = current_job.get("scene_images", {})
+                    si[str(sn)] = img_path
+                    jobs.update_field(job_id, "scene_images", si)
                     log(f"[{sn}/{len(scenes)}] ✅ Image ready")
                 except Exception as e:
                     log(f"[{sn}/{len(scenes)}] ⚠️  Image failed: {e}")
@@ -1709,7 +1789,7 @@ def generate():
 
                 # Audio
                 log(f"[{sn}/{len(scenes)}] 🎙️  Generating audio...")
-                jobs[job_id]["status_msg"] = f"Scene {sn}/{len(scenes)} — generating audio..."
+                jobs.update_field(job_id, "status_msg", f"Scene {sn}/{len(scenes)} — generating audio...")
                 try:
                     audio_result = generate_audio_for_scene(scene, project, voice_map)
                     audio_path   = build_scene_audio_track(scene, audio_result, project)
@@ -1721,48 +1801,62 @@ def generate():
 
                 # Animate
                 log(f"[{sn}/{len(scenes)}] 🎬 Animating scene...")
-                jobs[job_id]["status_msg"] = f"Scene {sn}/{len(scenes)} — animating..."
+                jobs.update_field(job_id, "status_msg", f"Scene {sn}/{len(scenes)} — animating...")
                 try:
                     clip = process_scene(scene, project, effective_provider, add_captions=True)
                     clip_paths.append(clip)
-                    jobs[job_id]["scene_clips"][str(sn)] = clip   # persist success
-                    jobs[job_id]["scenes_done"] = len(jobs[job_id]["scene_clips"])
+                    # Persist completed clip to disk
+                    current_job = jobs.get(job_id, {})
+                    sc_clips = current_job.get("scene_clips", {})
+                    sc_clips[str(sn)] = clip
+                    jobs.update_field(job_id, "scene_clips", sc_clips)
+                    jobs.update_field(job_id, "scenes_done", len(sc_clips))
                     log(f"[{sn}/{len(scenes)}] ✅ Scene complete → {clip}")
                 except Exception as e:
                     err = str(e)
-                    jobs[job_id]["scene_failures"][str(sn)] = err  # persist failure
+                    current_job = jobs.get(job_id, {})
+                    sc_fails = current_job.get("scene_failures", {})
+                    sc_fails[str(sn)] = err
+                    jobs.update_field(job_id, "scene_failures", sc_fails)
                     log(f"[{sn}/{len(scenes)}] ❌ Animation failed: {err}")
 
             # Build ordered clip list from scene_clips (preserves scene order)
+            current_job = jobs.get(job_id, {})
+            sc_clips_final = current_job.get("scene_clips", {})
+            sc_fails_final = current_job.get("scene_failures", {})
+
             ordered_clips = []
             for sc in scenes:
                 sn_key = str(sc.get("scene_number", ""))
-                if sn_key in jobs[job_id]["scene_clips"]:
-                    ordered_clips.append(jobs[job_id]["scene_clips"][sn_key])
+                if sn_key in sc_clips_final:
+                    ordered_clips.append(sc_clips_final[sn_key])
 
-            failed_count = len(jobs[job_id]["scene_failures"])
+            failed_count = len(sc_fails_final)
             if not ordered_clips:
                 raise ValueError("No clips were generated — all scenes failed")
 
             if failed_count > 0:
                 log(f"\n⚠️  {failed_count} scene(s) failed. Assembling {len(ordered_clips)}/{len(scenes)} completed scenes...")
                 log(f"   Use 'Retry Failed Scenes' to fix and reassemble.")
-                jobs[job_id]["status"] = "partial"  # partial success
+                jobs.update_field(job_id, "status", "partial")
             else:
                 log(f"\n🔗 Assembling {len(ordered_clips)} clips into final video...")
 
-            jobs[job_id]["status_msg"] = "Assembling final video..."
+            jobs.update_field(job_id, "status_msg", "Assembling final video...")
             bg = bg_music if bg_music and Path(bg_music).exists() else None
             final = assemble_final_video(ordered_clips, project, bg)
-            jobs[job_id]["output"] = final
-            jobs[job_id]["status"] = "done" if failed_count == 0 else "partial_done"
-            jobs[job_id]["status_msg"] = "Done!" if failed_count == 0 else f"Done ({failed_count} scene(s) failed — retry available)"
+            jobs.update_field(job_id, "output", final)
+            final_status = "done" if failed_count == 0 else "partial_done"
+            final_msg    = "Done!" if failed_count == 0 else f"Done ({failed_count} scene(s) failed — retry available)"
+            jobs.update_field(job_id, "status", final_status)
+            jobs.update_field(job_id, "status_msg", final_msg)
             log(f"\n✅ COMPLETE! → {final}")
 
         except Exception as e:
-            jobs[job_id]["status"] = "error"
-            jobs[job_id]["error"]  = str(e)
-            jobs[job_id]["logs"]  += f"\n❌ FATAL: {e}"
+            jobs.update_field(job_id, "status", "error")
+            jobs.update_field(job_id, "error", str(e))
+            current_logs = jobs.get(job_id, {}).get("logs", "")
+            jobs.update_field(job_id, "logs", current_logs + f"\n❌ FATAL: {e}")
 
     threading.Thread(target=run, daemon=True).start()
     return jsonify({"job_id": job_id})
