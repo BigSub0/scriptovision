@@ -563,10 +563,15 @@ You approve every scene before anything generates."></textarea>
 
         <!-- Download box -->
         <div class="download-box" id="download-box">
-          <div class="big-icon">🎉</div>
+          <div class="big-icon">U0001f389</div>
           <h2>Your Video is Ready!</h2>
           <p>All scenes animated and assembled into your final video.</p>
           <a id="download-link" href="#" download class="download-btn">⬇️ Download Final Video</a>
+          <div id="scene-clips-panel" style="margin-top:14px;background:#0a0a16;border:1px solid #1a2a1a;border-radius:8px;padding:12px;display:none">
+            <div style="font-size:.75rem;color:#555;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">📥 Individual Scene Clips (for CapCut)</div>
+            <div id="scene-clips-list" style="display:flex;flex-wrap:wrap;gap:6px"></div>
+          </div>
+          <button onclick="loadSceneClips()" style="margin-top:10px;background:transparent;border:1px solid #2a4a2a;color:#4aff6a;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:.78rem">📥 Show Individual Scene Downloads</button>
           <div class="btn-row" style="justify-content:center;margin-top:14px">
             <button class="btn btn-secondary btn-sm" onclick="startOver()">🔄 Make Another Video</button>
             <button class="btn btn-secondary btn-sm" onclick="goToStep(2)">← Back to Scenes</button>
@@ -579,6 +584,13 @@ You approve every scene before anything generates."></textarea>
           <h2 style="color:#e94560">Assembly Failed</h2>
           <p style="color:#aaa">All scenes were generated successfully. Click below to re-assemble the final video from the existing clips — no regeneration needed.</p>
           <button class="download-btn" style="background:#e94560" onclick="triggerReassemble()">🔄 Reassemble Video (30 sec)</button>
+          <div style="margin-top:12px">
+            <button onclick="loadSceneClips()" style="background:transparent;border:1px solid #2a4a2a;color:#4aff6a;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:.78rem">📥 Download Individual Scene Clips (for CapCut)</button>
+          </div>
+          <div id="scene-clips-panel" style="margin-top:10px;background:#0a0a16;border:1px solid #1a2a1a;border-radius:8px;padding:12px;display:none">
+            <div style="font-size:.75rem;color:#555;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">📥 Individual Scene Clips</div>
+            <div id="scene-clips-list" style="display:flex;flex-wrap:wrap;gap:6px"></div>
+          </div>
           <div class="btn-row" style="justify-content:center;margin-top:14px">
             <button class="btn btn-secondary btn-sm" onclick="startOver()">🔄 Start Over</button>
           </div>
@@ -594,6 +606,9 @@ You approve every scene before anything generates."></textarea>
             <a id="partial-download-link" href="#" download class="download-btn" style="background:#555">⬇️ Download Partial Video</a>
           </div>
           <p style="color:#555;font-size:.75rem;margin-top:10px">Retry only regenerates the failed scenes — completed scenes are kept.</p>
+          <div style="margin-top:10px">
+            <button onclick="loadSceneClips()" style="background:transparent;border:1px solid #2a4a2a;color:#4aff6a;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:.78rem">📥 Download Completed Scenes for CapCut</button>
+          </div>
           <div class="btn-row" style="justify-content:center;margin-top:10px">
             <button class="btn btn-secondary btn-sm" onclick="startOver()">🔄 Start Over</button>
           </div>
@@ -1125,6 +1140,23 @@ function updateGenScene(idx, state, imgPath) {
     const thumb = document.getElementById(`gen-thumb-${idx}`);
     if (thumb) thumb.innerHTML = `<img src="${imgPath}" alt="">`;
   }
+
+  // Show per-scene download button when scene is done
+  if (state === 'done' && currentJobId) {
+    const sceneNum = idx + 1;
+    let dlBtn = document.getElementById(`scene-dl-${idx}`);
+    if (!dlBtn) {
+      dlBtn = document.createElement('a');
+      dlBtn.id = `scene-dl-${idx}`;
+      dlBtn.style.cssText = 'display:inline-block;margin-top:5px;padding:3px 8px;background:#0a2a0a;border:1px solid #2a4a2a;color:#4aff6a;border-radius:5px;font-size:.72rem;text-decoration:none;cursor:pointer';
+      dlBtn.textContent = '⬇️ Download Clip';
+      dlBtn.title = 'Download this scene as MP4 — use in CapCut if final video fails';
+      const info = item.querySelector('.gen-scene-info');
+      if (info) info.appendChild(dlBtn);
+    }
+    dlBtn.href = `/download_scene/${currentJobId}/${sceneNum}`;
+    dlBtn.download = `scene_${String(sceneNum).padStart(2,'0')}.mp4`;
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1393,6 +1425,42 @@ async function triggerRetry() {
     }
   } catch(e) {
     notify('Retry error: ' + e, true);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PER-SCENE CLIP DOWNLOADS
+// ─────────────────────────────────────────────────────────────────────────────
+async function loadSceneClips() {
+  const jobId = currentJobId || window._currentJobId;
+  if (!jobId) { notify('No active job found.', true); return; }
+
+  const panel = document.getElementById('scene-clips-panel');
+  const list  = document.getElementById('scene-clips-list');
+  if (!panel || !list) return;
+
+  list.innerHTML = '<span style="color:#555;font-size:.8rem">Loading clips...</span>';
+  panel.style.display = 'block';
+
+  try {
+    const resp = await fetch('/scene_clips/' + jobId);
+    const data = await resp.json();
+    if (data.error) { list.innerHTML = '<span style="color:#e94560">' + data.error + '</span>'; return; }
+
+    if (!data.clips || data.clips.length === 0) {
+      list.innerHTML = '<span style="color:#555;font-size:.8rem">No clips found yet — clips appear here as each scene finishes animating.</span>';
+      return;
+    }
+
+    list.innerHTML = data.clips.map(clip => {
+      if (!clip.ready) return `<span style="padding:5px 10px;background:#1a1a2e;border-radius:5px;font-size:.75rem;color:#555">Scene ${clip.scene_num}: Not ready</span>`;
+      return `<a href="${clip.download_url}" download="scene_${String(clip.scene_num).padStart(2,'0')}.mp4"
+        style="padding:5px 12px;background:#0a2a0a;border:1px solid #2a4a2a;color:#4aff6a;border-radius:5px;font-size:.75rem;text-decoration:none;display:inline-block">
+        ⬇️ Scene ${clip.scene_num}: ${clip.title} (${clip.file_size_mb}MB)
+      </a>`;
+    }).join('');
+  } catch(e) {
+    list.innerHTML = '<span style="color:#e94560">Failed to load clips: ' + e + '</span>';
   }
 }
 
@@ -2000,6 +2068,53 @@ def download(job_id):
     if out and Path(out).exists():
         return send_file(out, as_attachment=True, download_name=Path(out).name)
     return jsonify({"error": "File not found"}), 404
+
+
+@app.route("/download_scene/<job_id>/<int:scene_num>")
+def download_scene(job_id, scene_num):
+    """Download an individual animated scene clip as MP4.
+    Works even if final video assembly failed — each scene is saved independently.
+    """
+    job = jobs.get(job_id, {})
+    sc_clips = job.get("scene_clips", {})
+    clip_path = sc_clips.get(str(scene_num))
+    if clip_path and Path(clip_path).exists():
+        fname = f"scene_{scene_num:02d}.mp4"
+        return send_file(clip_path, as_attachment=True, download_name=fname)
+    # Fallback: search TEMP_DIR for the clip by project name pattern
+    project = job.get("project", "project")
+    for pattern in [
+        f"{project}_clip_{scene_num:02d}_cap.mp4",
+        f"{project}_clip_{scene_num:02d}.mp4",
+    ]:
+        p = TEMP_DIR / pattern
+        if p.exists():
+            return send_file(str(p), as_attachment=True, download_name=f"scene_{scene_num:02d}.mp4")
+    return jsonify({"error": f"Scene {scene_num} clip not found"}), 404
+
+
+@app.route("/scene_clips/<job_id>")
+def scene_clips_list(job_id):
+    """Return list of all completed scene clips for a job with download URLs."""
+    job = jobs.get(job_id, {})
+    if not job:
+        return jsonify({"error": "Job not found"}), 404
+    sc_clips = job.get("scene_clips", {})
+    scenes_data = job.get("scenes_data", [])
+    result = []
+    for sn_str, clip_path in sorted(sc_clips.items(), key=lambda x: int(x[0])):
+        sn = int(sn_str)
+        exists = clip_path and Path(clip_path).exists()
+        title = next((s.get("title", f"Scene {sn}") for s in scenes_data
+                      if s.get("scene_number") == sn), f"Scene {sn}")
+        result.append({
+            "scene_num": sn,
+            "title": title,
+            "ready": exists,
+            "download_url": f"/download_scene/{job_id}/{sn}" if exists else None,
+            "file_size_mb": round(Path(clip_path).stat().st_size / (1024*1024), 1) if exists else 0
+        })
+    return jsonify({"clips": result, "total": len(result)})
 
 
 @app.route("/storage-status")
