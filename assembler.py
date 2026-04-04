@@ -165,7 +165,8 @@ def _fal_download_video(video_url: str, out_path: str) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def animate_scene(scene: dict, image_path: str, audio_path: str,
-                  project_name: str, provider: str = "kling") -> str:
+                  project_name: str, provider: str = "kling",
+                  visual_style: str = "cinematic photorealistic") -> str:
     """
     Animate a scene image into a cinematic video clip with audio.
     Uses Kling 1.6 (or chosen model) via Fal.ai async queue.
@@ -177,6 +178,16 @@ def animate_scene(scene: dict, image_path: str, audio_path: str,
     # Kling supports 5 or 10 seconds
     kling_duration = "10" if duration >= 8 else "5"
     motion    = scene.get("motion_prompt", "Cinematic camera movement, natural motion, film quality.")
+
+    # Inject live-action motion prefix for cinematic/photorealistic styles
+    live_action_styles = {"cinematic photorealistic", "dark gritty noir", "urban street photography"}
+    if visual_style in live_action_styles:
+        motion = (
+            "Realistic human movement, natural body language, cinematic camera work, "
+            "photorealistic motion, no cartoon motion, no animation artifacts, "
+            "film-quality movement. " + motion
+        )
+
     out_path  = str(TEMP_DIR / f"{project_name}_clip_{scene_num:02d}.mp4")
 
     if Path(out_path).exists():
@@ -213,7 +224,8 @@ def animate_scene(scene: dict, image_path: str, audio_path: str,
                 audio_path=audio_path,
                 out_path=out_path,
                 fal_key=fal_key,
-                provider=provider
+                provider=provider,
+                visual_style=visual_style
             )
         except Exception as e:
             err_str = str(e)
@@ -244,7 +256,8 @@ def animate_scene(scene: dict, image_path: str, audio_path: str,
 
 def _kling_animate(image_path: str, motion_prompt: str, duration: str,
                    audio_path: str, out_path: str,
-                   fal_key: str, provider: str = "kling") -> str:
+                   fal_key: str, provider: str = "kling",
+                   visual_style: str = "cinematic photorealistic") -> str:
     """
     Full Kling 1.6 image-to-video animation via Fal.ai async queue.
     """
@@ -254,14 +267,30 @@ def _kling_animate(image_path: str, motion_prompt: str, duration: str,
     print(f"    📤 Uploading image to Fal.ai...")
     image_url = _fal_upload_image(image_path, fal_key)
 
+    # cfg_scale: higher = more faithful to prompt/image, less creative drift
+    # For live-action/cinematic: 0.8 keeps it photorealistic
+    # For animated/cartoon styles: 0.5 allows more stylistic freedom
+    live_action_styles = {"cinematic photorealistic", "dark gritty noir", "urban street photography"}
+    cfg = 0.8 if visual_style in live_action_styles else 0.5
+
+    # Negative prompt — stronger for live-action to prevent cartoon artifacts
+    if visual_style in live_action_styles:
+        neg_prompt = (
+            "cartoon, anime, animation, illustrated, drawn, painted, CGI, 3D render, "
+            "static image, no motion, slideshow, zoom only, blurry, low quality, "
+            "unnatural movement, morphing, melting, distortion"
+        )
+    else:
+        neg_prompt = "static image, no motion, slideshow, zoom only, blurry, low quality"
+
     # Step 2: Build payload (Kling-specific params)
     payload = {
         "image_url": image_url,
         "prompt": motion_prompt,
-        "negative_prompt": "static image, no motion, slideshow, zoom only, blurry, low quality",
+        "negative_prompt": neg_prompt,
         "duration": duration,
         "aspect_ratio": "16:9",
-        "cfg_scale": 0.5
+        "cfg_scale": cfg
     }
 
     # LTX-2 / Wan use different params
@@ -742,7 +771,8 @@ def assemble_final_video(clip_paths: list, project_name: str,
 
 def process_scene(scene: dict, project_name: str,
                   provider: str = "kling",
-                  add_captions: bool = False) -> str:
+                  add_captions: bool = False,
+                  visual_style: str = "cinematic photorealistic") -> str:
     """
     Full pipeline for one scene:
     image + audio → AI animated clip → Kling LipSync (dialogue scenes only) → return clip
@@ -755,7 +785,7 @@ def process_scene(scene: dict, project_name: str,
 
     # Step 1: Animate the scene image
     clip_path = animate_scene(scene, image_path, audio_path,
-                              project_name, provider)
+                              project_name, provider, visual_style=visual_style)
 
     # Step 2: Apply lip sync for dialogue scenes (graceful fallback if it fails)
     if fal_key and scene.get("dialogue"):

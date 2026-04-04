@@ -416,6 +416,41 @@ textarea{resize:vertical;min-height:100px;font-family:monospace;line-height:1.5}
 .pulse{width:8px;height:8px;border-radius:50%;background:var(--red);animation:pulse 1.2s infinite}
 @keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(.7)}}
 
+/* ── SCENE PREVIEW PANEL ── */
+.preview-panel{display:none;background:#080810;border:2px solid #e94560;border-radius:12px;padding:18px;margin-top:14px}
+.preview-panel h2{color:#e94560;font-size:1rem;margin-bottom:4px;font-weight:700}
+.preview-panel .preview-sub{color:#666;font-size:.78rem;margin-bottom:14px}
+.preview-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;margin-bottom:14px}
+.preview-card{background:#0d0d1e;border:2px solid #1a1a2e;border-radius:10px;overflow:hidden;transition:border-color .2s}
+.preview-card.approved{border-color:#2a4a2a}
+.preview-card.rejected{border-color:#4a1a1a;opacity:.6}
+.preview-card.regenerating{border-color:#f1c40f;animation:pulse 1.2s infinite}
+.preview-card-header{display:flex;align-items:center;gap:8px;padding:8px 10px;background:#0a0a18;font-size:.8rem;font-weight:700;color:#ccc}
+.preview-card-num{background:#e94560;color:#fff;font-size:.65rem;font-weight:800;padding:2px 7px;border-radius:6px;flex-shrink:0}
+.preview-card-title{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.preview-card-status{font-size:.7rem;padding:2px 7px;border-radius:6px;font-weight:600;flex-shrink:0}
+.pcs-pending{background:#1a1a0a;color:#aaaa44;border:1px solid #3a3a1a}
+.pcs-approved{background:#0a1a0a;color:#44aa44;border:1px solid #1a3a1a}
+.pcs-rejected{background:#1a0a0a;color:#aa4444;border:1px solid #3a1a1a}
+.pcs-regen{background:#1a1200;color:#f1c40f;border:1px solid #3a3000}
+.preview-video-box{position:relative;background:#000;aspect-ratio:9/16;max-height:320px;overflow:hidden}
+.preview-video-box video{width:100%;height:100%;object-fit:contain;display:block}
+.preview-video-placeholder{width:100%;height:180px;display:flex;align-items:center;justify-content:center;color:#333;font-size:2rem;background:#050510}
+.preview-card-actions{display:flex;gap:6px;padding:8px 10px;background:#0a0a18;flex-wrap:wrap}
+.preview-btn{flex:1;padding:6px 10px;border-radius:6px;border:none;cursor:pointer;font-size:.75rem;font-weight:700;transition:all .2s;min-width:70px}
+.preview-btn-approve{background:#1a3a1a;color:#4aff6a;border:1px solid #2a4a2a}
+.preview-btn-approve:hover{background:#2a4a2a}
+.preview-btn-regen{background:#1a1200;color:#f1c40f;border:1px solid #3a3000}
+.preview-btn-regen:hover{background:#2a2000}
+.preview-btn-download{background:#1a1a2e;color:#aaa;border:1px solid #2a2a3e}
+.preview-btn-download:hover{background:#2a2a3e}
+.preview-assemble-bar{display:flex;align-items:center;gap:12px;padding:14px;background:#0a0a18;border-radius:10px;flex-wrap:wrap}
+.preview-counter{font-size:.85rem;color:#aaa;flex:1}
+.preview-counter strong{color:#4aff6a}
+.preview-assemble-btn{background:linear-gradient(135deg,#2ecc71,#27ae60);color:#fff;padding:12px 28px;border-radius:10px;font-size:.95rem;font-weight:700;border:none;cursor:pointer;transition:all .2s;opacity:.4;pointer-events:none}
+.preview-assemble-btn.ready{opacity:1;pointer-events:auto}
+.preview-assemble-btn.ready:hover{transform:translateY(-2px);box-shadow:0 6px 24px rgba(46,204,113,.4)}
+
 /* ── DOWNLOAD BOX ── */
 .download-box{display:none;background:#080f08;border:2px solid #2a4a2a;border-radius:12px;padding:24px;text-align:center;margin-top:14px}
 .download-box .big-icon{font-size:3rem;margin-bottom:8px}
@@ -728,6 +763,17 @@ You approve every scene before anything generates."></textarea>
                 <span id="gen-status">Initializing...</span>
               </div>
             </div>
+          </div>
+        </div>
+
+        <!-- Scene Preview & Approval Panel (shown when all clips are ready) -->
+        <div class="preview-panel" id="preview-panel">
+          <h2>🎬 Scene Preview &amp; Approval</h2>
+          <p class="preview-sub">Watch each clip, approve or regenerate. Assembly only starts when you click the button below.</p>
+          <div class="preview-grid" id="preview-grid"></div>
+          <div class="preview-assemble-bar">
+            <div class="preview-counter" id="preview-counter">0 of 0 scenes approved</div>
+            <button class="preview-assemble-btn" id="preview-assemble-btn" onclick="assembleApproved()">▶️ Assemble Final Video</button>
           </div>
         </div>
 
@@ -1318,17 +1364,43 @@ function updateApprovalSummary() {
 function buildVoiceMap() {
   const allChars = new Set(['narrator']);
   scenes.forEach(s => (s.dialogue || []).forEach(d => allChars.add(d.speaker.toLowerCase())));
-  const voices = ['onyx','echo','nova','shimmer','alloy','fable'];
+  const maleVoices = [
+    {v:'liam',    label:'Liam — Deep & Authoritative'},
+    {v:'callum',  label:'Callum — Intense American'},
+    {v:'george',  label:'George — Warm British'},
+    {v:'clyde',   label:'Clyde — Middle-aged American'},
+    {v:'adam',    label:'Adam — Deep American'},
+    {v:'brian',   label:'Brian — Clear Conversational'},
+    {v:'charlie', label:'Charlie — Natural Casual'},
+    {v:'dave',    label:'Dave — British Casual'},
+    {v:'fin',     label:'Fin — Irish Calm'},
+    {v:'daniel',  label:'Daniel — Expressive British'},
+  ];
+  const femaleVoices = [
+    {v:'sarah',    label:'Sarah — Warm Natural'},
+    {v:'charlotte',label:'Charlotte — Light Youthful'},
+    {v:'jessica',  label:'Jessica — Expressive American'},
+    {v:'matilda',  label:'Matilda — Warm American'},
+    {v:'grace',    label:'Grace — Southern American'},
+    {v:'rachel',   label:'Rachel — Calm American'},
+    {v:'domi',     label:'Domi — Strong American'},
+    {v:'elli',     label:'Elli — Young American'},
+    {v:'lily',     label:'Lily — Neutral Versatile'},
+  ];
+  const allVoices = [...maleVoices, ...femaleVoices];
   const container = document.getElementById('voice-map-rows');
   container.innerHTML = '';
   allChars.forEach(char => {
     const row = document.createElement('div');
     row.className = 'voice-row';
-    const defaultVoice = char === 'narrator' ? 'onyx' : voices[Math.floor(Math.random() * voices.length)];
+    const defaultVoice = char === 'narrator' ? 'liam' : 'callum';
+    const maleOpts = maleVoices.map(({v,label}) => `<option value="${v}" ${v===defaultVoice?'selected':''}>${label}</option>`).join('');
+    const femaleOpts = femaleVoices.map(({v,label}) => `<option value="${v}">${label}</option>`).join('');
     row.innerHTML = `
       <span class="char-label">${char.charAt(0).toUpperCase() + char.slice(1)}</span>
       <select id="voice-${char}" style="padding:4px 7px;font-size:.78rem">
-        ${voices.map(v => `<option value="${v}" ${v===defaultVoice?'selected':''}>${v}</option>`).join('')}
+        <optgroup label="Male Voices">${maleOpts}</optgroup>
+        <optgroup label="Female Voices">${femaleOpts}</optgroup>
       </select>`;
     container.appendChild(row);
   });
@@ -1617,6 +1689,23 @@ async function pollJob(jobId, totalScenes) {
         else if (etaEl) etaEl.textContent = 'Assembling final video...';
       }
 
+      // When all clips are ready (clips_ready status) OR all scenes done, show preview panel
+      if ((data.status === 'clips_ready' || (data.scenes_done || 0) >= totalScenes && data.status === 'running')
+          && !window._previewShown) {
+        window._previewShown = true;
+        showPreviewPanel(jobId, data);
+      }
+
+      // clips_ready = all scenes done, waiting for user to approve and assemble
+      if (data.status === 'clips_ready') {
+        const gs = document.getElementById('gen-status');
+        if (gs) gs.textContent = '🎬 All clips ready — review and approve below';
+        const etaEl = document.getElementById('gen-eta');
+        if (etaEl) etaEl.textContent = '';
+        // Keep polling in case user triggers assembly from another tab
+        continue;
+      }
+
       if (data.status === 'done') {
         onJobDone(jobId);
         break;
@@ -1725,6 +1814,191 @@ function onPartialDone(jobId, data) {
   setStep(5);
   notify('⚠️ Some scenes failed. Retry available.', true);
   clearSavedJob();
+}
+
+// ══════════════════════════════════════════════
+// SCENE PREVIEW & APPROVAL
+// ══════════════════════════════════════════════
+
+let _previewJobId = null;
+let _previewApprovals = {}; // scene_num → true/false
+let _previewScenes = [];    // [{scene_num, title}]
+
+async function showPreviewPanel(jobId, statusData) {
+  _previewJobId = jobId;
+  _previewApprovals = {};
+  _previewScenes = [];
+  window._previewShown = true;
+
+  const panel = document.getElementById('preview-panel');
+  if (!panel) return;
+  panel.style.display = 'block';
+  panel.scrollIntoView({behavior:'smooth', block:'start'});
+
+  const gs = document.getElementById('gen-status');
+  if (gs) gs.textContent = '🎬 All clips ready — review and approve below';
+
+  // Fetch clip list
+  try {
+    const resp = await fetch('/scene_clips/' + jobId);
+    const data = await resp.json();
+    const clips = data.clips || [];
+    _previewScenes = clips;
+
+    const grid = document.getElementById('preview-grid');
+    if (!grid) return;
+    grid.innerHTML = '';
+
+    clips.forEach(clip => {
+      const sn = clip.scene_num;
+      const card = document.createElement('div');
+      card.className = 'preview-card';
+      card.id = `pcard-${sn}`;
+      const videoSrc = `/serve_clip/${jobId}/${sn}`;
+      card.innerHTML = `
+        <div class="preview-card-header">
+          <span class="preview-card-num">${sn}</span>
+          <span class="preview-card-title">${clip.title}</span>
+          <span class="preview-card-status pcs-pending" id="pcs-${sn}">Pending</span>
+        </div>
+        <div class="preview-video-box">
+          <video controls playsinline preload="metadata" src="${videoSrc}" style="width:100%;height:100%;object-fit:contain">
+            Your browser does not support video.
+          </video>
+        </div>
+        <div class="preview-card-actions">
+          <button class="preview-btn preview-btn-approve" onclick="approvePreviewScene(${sn})">✅ Approve</button>
+          <button class="preview-btn preview-btn-regen" onclick="regenPreviewScene(${sn})">🔄 Regenerate</button>
+          <a class="preview-btn preview-btn-download" href="/download_scene/${jobId}/${sn}" download>⬇️ Save</a>
+        </div>
+      `;
+      grid.appendChild(card);
+    });
+
+    updatePreviewCounter();
+    notify('🎬 All scenes ready — review and approve before assembling!');
+  } catch(e) {
+    console.error('Preview panel error:', e);
+  }
+}
+
+function approvePreviewScene(sceneNum) {
+  _previewApprovals[sceneNum] = true;
+  const card = document.getElementById(`pcard-${sceneNum}`);
+  if (card) { card.className = 'preview-card approved'; }
+  const badge = document.getElementById(`pcs-${sceneNum}`);
+  if (badge) { badge.className = 'preview-card-status pcs-approved'; badge.textContent = '✅ Approved'; }
+  updatePreviewCounter();
+}
+
+async function regenPreviewScene(sceneNum) {
+  if (!_previewJobId) return;
+  const card = document.getElementById(`pcard-${sceneNum}`);
+  if (card) card.className = 'preview-card regenerating';
+  const badge = document.getElementById(`pcs-${sceneNum}`);
+  if (badge) { badge.className = 'preview-card-status pcs-regen'; badge.textContent = '🔄 Regenerating...'; }
+  delete _previewApprovals[sceneNum];
+  updatePreviewCounter();
+  notify(`🔄 Regenerating scene ${sceneNum}...`);
+
+  try {
+    const resp = await fetch('/regenerate_scene', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ job_id: _previewJobId, scene_num: sceneNum })
+    });
+    const data = await resp.json();
+    if (data.error) { notify(data.error, true); return; }
+    const regenJobId = data.regen_job_id;
+
+    // Poll regen job
+    while (true) {
+      await new Promise(r => setTimeout(r, 5000));
+      const sr = await fetch('/status/' + regenJobId);
+      const sd = await sr.json();
+      if (sd.status === 'done') {
+        // Reload the video in the card
+        const videoBox = card ? card.querySelector('.preview-video-box') : null;
+        if (videoBox) {
+          const ts = Date.now();
+          videoBox.innerHTML = `<video controls playsinline preload="metadata" src="/serve_clip/${_previewJobId}/${sceneNum}?t=${ts}" style="width:100%;height:100%;object-fit:contain">Your browser does not support video.</video>`;
+        }
+        if (card) card.className = 'preview-card';
+        if (badge) { badge.className = 'preview-card-status pcs-pending'; badge.textContent = 'Pending'; }
+        notify(`✅ Scene ${sceneNum} regenerated — review and approve`);
+        break;
+      } else if (sd.status === 'error') {
+        if (card) card.className = 'preview-card';
+        if (badge) { badge.className = 'preview-card-status pcs-pending'; badge.textContent = 'Regen failed'; }
+        notify(`❌ Scene ${sceneNum} regeneration failed: ${sd.error || 'Unknown'}`, true);
+        break;
+      }
+    }
+  } catch(e) {
+    notify('Regeneration error: ' + e.message, true);
+  }
+}
+
+function updatePreviewCounter() {
+  const total = _previewScenes.length;
+  const approved = Object.values(_previewApprovals).filter(Boolean).length;
+  const counter = document.getElementById('preview-counter');
+  if (counter) counter.innerHTML = `<strong>${approved}</strong> of <strong>${total}</strong> scenes approved`;
+  const btn = document.getElementById('preview-assemble-btn');
+  if (btn) {
+    if (approved === total && total > 0) {
+      btn.classList.add('ready');
+      btn.textContent = `▶️ Assemble Final Video (${approved} scenes)`;
+    } else {
+      btn.classList.remove('ready');
+      btn.textContent = `▶️ Assemble Final Video`;
+    }
+  }
+}
+
+async function assembleApproved() {
+  if (!_previewJobId) return;
+  const approvedNums = Object.entries(_previewApprovals)
+    .filter(([,v]) => v).map(([k]) => parseInt(k));
+  if (approvedNums.length === 0) {
+    notify('Approve at least one scene first!', true);
+    return;
+  }
+
+  const btn = document.getElementById('preview-assemble-btn');
+  if (btn) { btn.textContent = '⏳ Assembling...'; btn.classList.remove('ready'); }
+  notify('🔗 Assembling your approved scenes...');
+
+  try {
+    const resp = await fetch('/assemble', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ job_id: _previewJobId, approved_scenes: approvedNums })
+    });
+    const data = await resp.json();
+    if (data.error) { notify(data.error, true); return; }
+    const assembleJobId = data.assemble_job_id;
+
+    // Poll assembly job
+    while (true) {
+      await new Promise(r => setTimeout(r, 4000));
+      const sr = await fetch('/status/' + assembleJobId);
+      const sd = await sr.json();
+      if (sd.status === 'done') {
+        // Hide preview panel, show download box
+        const panel = document.getElementById('preview-panel');
+        if (panel) panel.style.display = 'none';
+        onJobDone(_previewJobId);
+        break;
+      } else if (sd.status === 'error') {
+        notify('Assembly failed: ' + (sd.error || 'Unknown'), true);
+        if (btn) { btn.textContent = '▶️ Retry Assembly'; btn.classList.add('ready'); }
+        break;
+      }
+    }
+  } catch(e) {
+    notify('Assembly error: ' + e.message, true);
+  }
 }
 
 async function triggerRetry() {
@@ -2321,6 +2595,7 @@ def generate():
         "provider": provider,
         "voice_map": voice_map,
         "style": style,
+        "visual_style": style,
         "bg_music": bg_music,
     }
 
@@ -2441,6 +2716,18 @@ def generate():
             if not ordered_clips:
                 raise ValueError("No clips were generated — all scenes failed")
 
+            # ══ PAUSE HERE — let user preview and approve scenes before assembly ══
+            log(f"\n🎬 All {len(ordered_clips)} clips ready! Review scenes in the preview panel.")
+            log(f"   Click '▶️ Assemble Final Video' when you're happy with all clips.")
+            jobs.update_field(job_id, "status", "clips_ready")
+            jobs.update_field(job_id, "status_msg", "🎬 Review scenes below — click Assemble when ready")
+
+            # Wait for user to trigger assembly via /assemble endpoint
+            # The /assemble endpoint handles the actual assembly and sets status to 'done'
+            # We just exit the thread here — assembly runs in its own thread
+            return
+
+            # ══ CODE BELOW IS KEPT FOR DIRECT/RETRY ASSEMBLY ══
             if failed_count > 0:
                 log(f"\n⚠️  {failed_count} scene(s) failed. Assembling {len(ordered_clips)}/{len(scenes)} completed scenes...")
                 log(f"   Use 'Retry Failed Scenes' to fix and reassemble.")
@@ -2625,6 +2912,23 @@ def serve_image(job_id, scene_num):
     return "Not found", 404
 
 
+@app.route("/serve_clip/<job_id>/<int:scene_num>")
+def serve_clip(job_id, scene_num):
+    """Stream a scene clip for inline browser playback (used in preview panel)."""
+    job = jobs.get(job_id, {})
+    sc_clips = job.get("scene_clips", {})
+    clip_path = sc_clips.get(str(scene_num))
+    if clip_path and Path(clip_path).exists():
+        return send_file(clip_path, mimetype="video/mp4", conditional=True)
+    # Fallback: search by pattern
+    project = job.get("project", "project")
+    for pattern in [f"{project}_clip_{scene_num:02d}_cap.mp4", f"{project}_clip_{scene_num:02d}.mp4"]:
+        p = TEMP_DIR / pattern
+        if p.exists():
+            return send_file(str(p), mimetype="video/mp4", conditional=True)
+    return "Not found", 404
+
+
 @app.route("/download/<job_id>")
 def download(job_id):
     job = jobs.get(job_id, {})
@@ -2709,6 +3013,144 @@ def scene_clips_list(job_id):
             "file_size_mb": round(Path(clip_path).stat().st_size / (1024*1024), 1) if exists else 0
         })
     return jsonify({"clips": result, "total": len(result)})
+
+
+@app.route("/regenerate_scene", methods=["POST"])
+def regenerate_scene():
+    """Regenerate a single scene clip without rerunning the whole job.
+    Used in the Scene Preview & Approval step.
+    """
+    data     = request.json or {}
+    job_id   = data.get("job_id")
+    scene_num = int(data.get("scene_num", 0))
+    if not job_id or not scene_num:
+        return jsonify({"error": "job_id and scene_num required"}), 400
+
+    job = jobs.get(job_id, {})
+    if not job:
+        return jsonify({"error": "Job not found"}), 404
+
+    scenes_data = job.get("scenes_data", [])
+    scene = next((s for s in scenes_data if s.get("scene_number") == scene_num), None)
+    if not scene:
+        return jsonify({"error": f"Scene {scene_num} not found in job"}), 404
+
+    regen_job_id = f"{job_id}_regen_{scene_num}"
+    jobs.set(regen_job_id, {
+        "status": "running",
+        "logs": f"Regenerating scene {scene_num}...",
+        "scene_num": scene_num,
+        "parent_job_id": job_id,
+    })
+
+    def run_regen():
+        try:
+            from assembler import process_scene
+            from image_gen import generate_scene_image
+            from tts_engine import generate_audio_for_scene
+
+            project  = job.get("project", "project")
+            provider = job.get("provider", "kling")
+            style    = job.get("visual_style", "cinematic photorealistic")
+            voice_map = job.get("voice_map", {})
+
+            jobs.update_field(regen_job_id, "logs", f"[{scene_num}] 🖼️  Regenerating image...")
+            img_path = generate_scene_image(scene, project)
+            scene["_image_path"] = img_path
+            # Update parent job scene_images
+            si = jobs.get(job_id, {}).get("scene_images", {})
+            si[str(scene_num)] = img_path
+            jobs.update_field(job_id, "scene_images", si)
+
+            jobs.update_field(regen_job_id, "logs",
+                jobs.get(regen_job_id, {}).get("logs", "") + f"\n[{scene_num}] 🎙️  Regenerating audio...")
+            audio_path = generate_audio_for_scene(scene, project, voice_map)
+            scene["_audio_path"] = audio_path
+
+            jobs.update_field(regen_job_id, "logs",
+                jobs.get(regen_job_id, {}).get("logs", "") + f"\n[{scene_num}] 🎬 Re-animating...")
+            clip = process_scene(scene, project, provider=provider,
+                                 add_captions=False, visual_style=style)
+
+            # Update parent job scene_clips
+            sc_clips = jobs.get(job_id, {}).get("scene_clips", {})
+            sc_clips[str(scene_num)] = clip
+            jobs.update_field(job_id, "scene_clips", sc_clips)
+            # Remove from failures if it was there
+            sc_fails = jobs.get(job_id, {}).get("scene_failures", {})
+            sc_fails.pop(str(scene_num), None)
+            jobs.update_field(job_id, "scene_failures", sc_fails)
+
+            jobs.update_field(regen_job_id, "status", "done")
+            jobs.update_field(regen_job_id, "clip_url", f"/serve_clip/{job_id}/{scene_num}")
+            jobs.update_field(regen_job_id, "logs",
+                jobs.get(regen_job_id, {}).get("logs", "") + f"\n[{scene_num}] ✅ Scene regenerated!")
+        except Exception as e:
+            jobs.update_field(regen_job_id, "status", "error")
+            jobs.update_field(regen_job_id, "error", str(e))
+
+    threading.Thread(target=run_regen, daemon=True).start()
+    return jsonify({"regen_job_id": regen_job_id})
+
+
+@app.route("/assemble", methods=["POST"])
+def assemble_approved():
+    """Assemble only the approved scenes into the final video.
+    Called from the Scene Preview & Approval panel.
+    """
+    data        = request.json or {}
+    job_id      = data.get("job_id")
+    approved_nums = data.get("approved_scenes", [])  # list of scene_numbers to include
+    if not job_id:
+        return jsonify({"error": "job_id required"}), 400
+
+    job = jobs.get(job_id, {})
+    if not job:
+        return jsonify({"error": "Job not found"}), 404
+
+    assemble_job_id = f"{job_id}_assemble"
+    jobs.set(assemble_job_id, {
+        "status": "running",
+        "logs": "Assembling approved scenes...",
+        "parent_job_id": job_id,
+    })
+
+    def run_assemble():
+        try:
+            from assembler import assemble_final_video
+            sc_clips = job.get("scene_clips", {})
+            project  = job.get("project", "project")
+            bg_music = job.get("bg_music")
+
+            # Build ordered clip list from approved scene numbers
+            ordered_clips = []
+            for sn in sorted(approved_nums):
+                clip = sc_clips.get(str(sn))
+                if clip and Path(clip).exists():
+                    ordered_clips.append(clip)
+
+            if not ordered_clips:
+                raise ValueError("No approved clips found to assemble")
+
+            jobs.update_field(assemble_job_id, "logs",
+                f"Assembling {len(ordered_clips)} approved scenes...")
+            bg = bg_music if bg_music and Path(bg_music).exists() else None
+            final = assemble_final_video(ordered_clips, project, bg)
+
+            # Update parent job with final output
+            jobs.update_field(job_id, "output", final)
+            jobs.update_field(job_id, "status", "done")
+            jobs.update_field(job_id, "status_msg", "Done!")
+
+            jobs.update_field(assemble_job_id, "status", "done")
+            jobs.update_field(assemble_job_id, "output", final)
+            jobs.update_field(assemble_job_id, "download_url", f"/download/{job_id}")
+        except Exception as e:
+            jobs.update_field(assemble_job_id, "status", "error")
+            jobs.update_field(assemble_job_id, "error", str(e))
+
+    threading.Thread(target=run_assemble, daemon=True).start()
+    return jsonify({"assemble_job_id": assemble_job_id})
 
 
 @app.route("/storage-status")
@@ -2856,6 +3298,7 @@ def retry_failed():
         "provider": provider,
         "voice_map": voice_map,
         "style": style,
+        "visual_style": style,
         "bg_music": bg_music,
     }
 
