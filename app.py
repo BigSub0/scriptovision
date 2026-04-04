@@ -846,6 +846,9 @@ You approve every scene before anything generates."></textarea>
 
         <div class="card" id="bible-display"></div>
 
+        <!-- Auto-populated character bible suggestions from video analysis -->
+        <div id="bible-suggestions-panel" style="display:none"></div>
+
         <div class="card" style="margin-top:14px">
           <div class="card-title">📝 Generated Script — Episode <span id="ep-num">2</span></div>
           <textarea id="generated-script" class="big-textarea" style="font-family:monospace;font-size:.8rem"></textarea>
@@ -1870,13 +1873,96 @@ async function analyzeVideo() {
     renderBible(data);
     document.getElementById('view-upload').style.display = 'none';
     document.getElementById('view-bible').style.display = 'block';
-    notify('✅ Show analyzed! Review the generated script below.');
+    
+    // Show bible auto-populate notification
+    const populated = data.bible_populated || [];
+    const suggestions = data.bible_suggestions || [];
+    if (populated.length > 0) {
+      notify(`✅ Show analyzed! ${populated.length} character(s) auto-added to Character Bible: ${populated.join(', ')}. Edit them in the sidebar.`);
+      loadBible(); // Refresh the sidebar bible list
+    } else if (suggestions.length > 0) {
+      notify('✅ Show analyzed! Characters detected — review the Character Bible panel in the sidebar.');
+    } else {
+      notify('✅ Show analyzed! Review the generated script below.');
+    }
+    
+    // Show bible suggestions review panel if any were detected
+    if (suggestions.length > 0) {
+      renderBibleSuggestions(suggestions, populated);
+    }
   } catch(e) {
     notify('Analysis failed: ' + e, true);
   } finally {
     btn.disabled = false;
     btn.innerHTML = '🔍 Analyze Video & Write Next Episode';
   }
+}
+
+function renderBibleSuggestions(suggestions, populated) {
+  const container = document.getElementById('bible-suggestions-panel');
+  if (!container) return;
+  
+  const rows = suggestions.map(s => {
+    const wasAdded = populated.includes(s.name);
+    const statusBadge = wasAdded 
+      ? '<span style="color:#4aff6a;font-size:.65rem">✅ Added to Bible</span>'
+      : '<span style="color:#f5a623;font-size:.65rem">⚠️ Already in Bible (not overwritten)</span>';
+    return `
+      <div style="border:1px solid #2a2a2a;border-radius:8px;padding:10px;margin-bottom:8px;background:#111">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+          <span style="color:#fff;font-weight:700;font-size:.8rem">${s.gender === 'female' ? '👩' : '👨'} ${s.name}</span>
+          ${statusBadge}
+        </div>
+        <div style="font-size:.7rem;color:#888;margin-bottom:4px"><strong style="color:#aaa">Face:</strong> ${s.face_seed}</div>
+        <div style="font-size:.7rem;color:#888;margin-bottom:4px"><strong style="color:#aaa">Voice:</strong> ${s.voice_name}</div>
+        <div style="font-size:.7rem;color:#555">${s.description}</div>
+        <div style="display:flex;gap:6px;margin-top:8px">
+          <button class="btn btn-secondary btn-sm" onclick="editBibleChar('${s.name}','${s.face_seed.replace(/'/g,"\\'")}',' ${s.voice_name}','${s.gender}')" style="flex:1;font-size:.65rem">✏️ Edit</button>
+          ${!wasAdded ? `<button class="btn btn-primary btn-sm" onclick="forceAddBibleChar('${s.name}','${s.face_seed.replace(/'/g,"\\'")}',' ${s.voice_name}','${s.gender}')" style="flex:1;font-size:.65rem">➕ Add to Bible</button>` : ''}
+        </div>
+      </div>`;
+  }).join('');
+  
+  container.innerHTML = `
+    <div style="background:#0d1117;border:1px solid #2a2a2a;border-radius:10px;padding:14px;margin-top:12px">
+      <div style="font-size:.8rem;font-weight:700;color:#fff;margin-bottom:8px">📖 Characters Auto-Detected from Video</div>
+      <div style="font-size:.7rem;color:#666;margin-bottom:10px">These were extracted from your video and added to the Character Bible. Edit any entry to refine the face description or change the voice.</div>
+      ${rows}
+    </div>`;
+  container.style.display = 'block';
+}
+
+async function editBibleChar(name, faceSeed, voiceName, gender) {
+  // Pre-fill the add character form in the sidebar with this character's data
+  document.getElementById('char-name').value = name;
+  document.getElementById('char-face').value = faceSeed.trim();
+  const voiceSelect = document.getElementById('char-voice');
+  if (voiceSelect) {
+    const opt = Array.from(voiceSelect.options).find(o => o.value === voiceName.trim());
+    if (opt) voiceSelect.value = voiceName.trim();
+  }
+  const genderSelect = document.getElementById('char-gender');
+  if (genderSelect) genderSelect.value = gender;
+  document.getElementById('add-char-form').style.display = 'block';
+  document.getElementById('char-save-msg').textContent = `Editing ${name} — modify and click Save.`;
+  document.getElementById('char-save-msg').style.color = '#f5a623';
+  // Scroll sidebar to bible card
+  document.getElementById('char-bible-card').scrollIntoView({behavior:'smooth'});
+}
+
+async function forceAddBibleChar(name, faceSeed, voiceName, gender) {
+  try {
+    const resp = await fetch('/character-bible', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name, face_seed: faceSeed.trim(), voice_name: voiceName.trim(), gender})
+    });
+    const data = await resp.json();
+    if (data.ok) {
+      notify(`✅ ${name} added to Character Bible!`);
+      loadBible();
+    }
+  } catch(e) { notify('Error: ' + e, true); }
 }
 
 function renderBible(data) {
@@ -2693,6 +2779,33 @@ def analyze():
         sys.path.insert(0, str(_BASE))
         from video_analyzer import analyze_and_continue
         result = analyze_and_continue(vid_path, title, user_direction=direction)
+        
+        # Auto-populate character bible from analysis suggestions
+        bible_populated = []
+        suggestions = result.get("show_bible", {}).get("character_bible_suggestions", [])
+        if suggestions:
+            try:
+                from character_bible import add_character, get_character
+                for s in suggestions:
+                    name = s.get("name", "").strip().upper()
+                    face_seed = s.get("face_seed", "").strip()
+                    voice_name = s.get("voice_name", "liam")
+                    gender = s.get("gender", "male")
+                    description = s.get("description", "")
+                    if name and face_seed:
+                        # Only auto-add if not already in bible (don't overwrite user edits)
+                        existing = get_character(name)
+                        if not existing:
+                            add_character(name, face_seed, voice_name, gender, description)
+                            bible_populated.append(name)
+                            print(f"[CharBible] Auto-populated from analysis: {name}")
+                        else:
+                            print(f"[CharBible] Skipped (already in bible): {name}")
+            except Exception as be:
+                print(f"[CharBible] Auto-populate error: {be}")
+        
+        result["bible_populated"] = bible_populated
+        result["bible_suggestions"] = suggestions  # Send back to UI for review
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500

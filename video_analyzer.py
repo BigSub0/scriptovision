@@ -121,9 +121,19 @@ Analyze the provided transcript AND video frames to extract a complete show bibl
 CRITICAL: For each character, provide an extremely detailed visual description that can be
 used to generate CONSISTENT images of that character across all future episodes. Include:
 - Exact skin tone, hair color/style/length, facial features
-- Typical clothing style, colors, accessories
+- Typical clothing style, colors, accessories  
 - Body type, age range, distinguishing features
 - Art style (realistic, animated, cartoon, etc.)
+
+Also provide character_bible_suggestions: a ready-to-use face_seed string for each character
+(concise but complete physical description for DALL-E, max 120 chars) and a recommended
+ElevenLabs voice name from this list:
+Male: liam (deep authoritative), brian (clear conversational), charlie (natural casual),
+callum (intense), adam (deep american), george (warm british), clyde (middle-aged american),
+dave (british casual), fin (irish calm), daniel (expressive british)
+Female: sarah (warm natural), charlotte (light youthful), rachel (calm american),
+jessica (expressive american), matilda (warm american), grace (southern american),
+domi (strong american), elli (young american), lily (neutral versatile)
 
 Return this exact JSON structure:
 {
@@ -144,6 +154,15 @@ Return this exact JSON structure:
       "image_reference": "string — DALL-E prompt snippet to include whenever this character appears",
       "voice_style": "string",
       "relationships": "string"
+    }
+  ],
+  "character_bible_suggestions": [
+    {
+      "name": "string — CHARACTER NAME IN CAPS",
+      "face_seed": "string — concise physical description for DALL-E image prompts, max 120 chars",
+      "voice_name": "string — one of the ElevenLabs voice names listed above",
+      "gender": "male or female",
+      "description": "string — 1 sentence character bio"
     }
   ],
   "recurring_locations": ["list"],
