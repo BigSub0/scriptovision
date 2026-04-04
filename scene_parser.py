@@ -116,13 +116,13 @@ Each image_prompt MUST:
 """
     active_client = _get_client(os.environ.get("OPENAI_API_KEY", ""))
     response = active_client.chat.completions.create(
-        model="gpt-4.1-mini",
+        model="gpt-4.1",  # Upgraded from mini — needed for full character descriptions in every scene
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_prompt}
         ],
-        temperature=0.6,
-        max_tokens=4000
+        temperature=0.4,  # Lower temp = more consistent character descriptions
+        max_tokens=8000   # Enough for 10 scenes with full character descriptions
     )
 
     raw = response.choices[0].message.content.strip()
@@ -133,16 +133,22 @@ Each image_prompt MUST:
 
     scenes = json.loads(raw)
     
-    # Post-process: inject face seeds for any character GPT missed
+    # Post-process: HARD ENFORCE face seeds and negative prompts
     try:
-        from character_bible import inject_face_seeds_into_prompt
+        from character_bible import inject_face_seeds_into_prompt, enforce_negative_prompt
         for scene in scenes:
             chars = scene.get("characters", [])
-            if chars and scene.get("image_prompt"):
-                scene["image_prompt"] = inject_face_seeds_into_prompt(
-                    scene["image_prompt"], chars
-                )
-    except Exception:
+            prompt = scene.get("image_prompt", "")
+            if not prompt:
+                continue
+            # Step 1: Hard-replace any GPT-invented character descriptions with bible versions
+            if chars:
+                prompt = inject_face_seeds_into_prompt(prompt, chars)
+            # Step 2: Always enforce negative prompt at the end (survives truncation)
+            prompt = enforce_negative_prompt(prompt)
+            scene["image_prompt"] = prompt
+    except Exception as e:
+        print(f"[SceneParser] Post-process warning: {e}")
         pass  # Never crash the pipeline over this
     
     return scenes

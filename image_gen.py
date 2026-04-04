@@ -109,9 +109,21 @@ STYLE_SUFFIXES = {
 
 def _dalle_generate(prompt: str, output_path: str, style: str = "cinematic photorealistic") -> str:
     """Generate image using DALL-E 3."""
-    safe_prompt = prompt[:900]
+    # DALL-E 3 supports up to 4000 chars. Use 3500 to leave room for suffix.
+    # Preserve the END of the prompt (negative exclusions) — truncate from the middle if needed.
+    NEGATIVE_TAIL = "No film crew, no camera equipment, no tripod, no production equipment, no text, no watermarks, no subtitles, no logos, no behind-the-scenes equipment."
     suffix = STYLE_SUFFIXES.get(style, STYLE_SUFFIXES["cinematic photorealistic"])
-    safe_prompt += f" {suffix}"
+    
+    # Remove any existing negative tail from prompt to avoid duplication
+    import re as _re
+    clean_prompt = _re.sub(r'No film crew[^.]*\.', '', prompt, flags=_re.IGNORECASE).strip()
+    
+    # Build: style suffix + clean prompt (truncated) + negative tail
+    combined = f"{clean_prompt} {suffix}"
+    max_body = 3500 - len(NEGATIVE_TAIL) - 2
+    if len(combined) > max_body:
+        combined = combined[:max_body]
+    safe_prompt = f"{combined} {NEGATIVE_TAIL}"
 
     active_client = _get_client()
     response = active_client.images.generate(

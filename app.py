@@ -2243,7 +2243,7 @@ def generate():
                 log(f"[{sn}/{len(scenes)}] 🎬 Animating scene...")
                 jobs.update_field(job_id, "status_msg", f"Scene {sn}/{len(scenes)} — animating...")
                 try:
-                    clip = process_scene(scene, project, effective_provider, add_captions=True)
+                    clip = process_scene(scene, project, effective_provider, add_captions=False)
                     clip_paths.append(clip)
                     # Persist completed clip to disk
                     current_job = jobs.get(job_id, {})
@@ -2739,7 +2739,7 @@ def retry_failed():
                 log(f"[{sn}/{total}] 🎬 Animating scene...")
                 jobs[retry_job_id]["status_msg"] = f"Scene {sn} — animating..."
                 try:
-                    clip = process_scene(scene, project, provider, add_captions=True)
+                    clip = process_scene(scene, project, provider, add_captions=False)
                     jobs[retry_job_id]["scene_clips"][str(sn)] = clip
                     jobs[retry_job_id]["scenes_done"] += 1
                     log(f"[{sn}/{total}] ✅ Scene complete → {clip}")

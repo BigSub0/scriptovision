@@ -462,9 +462,11 @@ def apply_lipsync(clip_path: str, audio_path: str, scene: dict,
     print(f"    👄 Applying Kling LipSync to scene {scene_num}...")
 
     try:
+        print(f"    📤 Uploading clip to Fal.ai for lip sync...")
         # Upload clip and audio to Fal.ai CDN
-        video_url = _fal_upload_image(clip_path, fal_key)  # reuse upload helper
+        video_url = _fal_upload_image(clip_path, fal_key)
         audio_url = _fal_upload_image(audio_path, fal_key)
+        print(f"    📤 Both files uploaded. Submitting lip sync job...")
 
         # Submit lip sync job
         payload = {
@@ -472,29 +474,41 @@ def apply_lipsync(clip_path: str, audio_path: str, scene: dict,
             "audio_url": audio_url,
         }
         job = _fal_submit_job("fal-ai/kling-video/lipsync/audio-to-video", payload, fal_key)
-        print(f"    ⏳ LipSync job submitted: {job['request_id']} (takes ~12 min)")
+        print(f"    ⏳ LipSync job submitted: {job['request_id']}")
+        print(f"    📶 Status URL: {job.get('status_url', 'N/A')}")
+        print(f"    ⏳ Polling for result (lip sync takes 10-15 min)...")
 
-        # Poll for result (lip sync takes ~12 min per Fal.ai docs)
+        # Poll for result
         result = _fal_poll_job(
             status_url=job["status_url"],
             response_url=job["response_url"],
             request_id=job["request_id"],
             fal_key=fal_key,
-            max_wait=900,   # 15 min max
+            max_wait=1200,  # 20 min max
             poll_interval=20
         )
 
+        # Extract video URL from result — handle multiple response shapes
         video_data = result.get("video", {})
-        lipsync_url = video_data.get("url") if isinstance(video_data, dict) else None
+        lipsync_url = None
+        if isinstance(video_data, dict):
+            lipsync_url = video_data.get("url")
+        elif isinstance(video_data, str):
+            lipsync_url = video_data
         if not lipsync_url:
-            raise ValueError(f"No video URL in lip sync result: {result}")
+            # Try alternate keys
+            lipsync_url = result.get("url") or result.get("video_url")
+        if not lipsync_url:
+            raise ValueError(f"No video URL in lip sync result. Keys: {list(result.keys())}")
 
+        print(f"    ⬇️  Downloading lip-synced clip...")
         _fal_download_video(lipsync_url, lipsync_path)
         print(f"    ✅ LipSync complete → {lipsync_path}")
         return lipsync_path
 
     except Exception as e:
-        print(f"    ⚠️  LipSync failed ({e}) — using original animated clip")
+        print(f"    ⚠️  LipSync FAILED: {e}")
+        print(f"    ⚠️  Falling back to animated clip without lip sync")
         return clip_path  # Graceful fallback — never crash the pipeline
 
 
