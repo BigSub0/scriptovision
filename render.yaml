@@ -8,14 +8,14 @@ services:
     healthCheckPath: /
     disk:
       name: scriptovision-data
-      mountPath: /data
+      mountPath: /opt/data
       sizeGB: 10
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.0
       - key: JOBS_DIR
-        value: /data/jobs
+        value: /opt/data/jobs
       - key: OUTPUT_DIR
-        value: /data/output
+        value: /opt/data/output
       - key: TEMP_DIR
-        value: /data/temp
+        value: /opt/data/temp

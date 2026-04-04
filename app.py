@@ -30,7 +30,7 @@ for d in [UPLOAD_DIR, OUTPUT_DIR, TEMP_DIR, IMAGES_DIR, AUDIO_DIR]:
 # JOBS_DIR on persistent disk — survives Render restarts
 JOBS_DIR = Path(os.environ.get("JOBS_DIR", str(_BASE / "jobs")))
 JOBS_DIR.mkdir(parents=True, exist_ok=True)
-print(f"[ScriptoVision] JOBS_DIR = {JOBS_DIR} (persistent: {str(JOBS_DIR).startswith('/data')})")
+print(f"[ScriptoVision] JOBS_DIR = {JOBS_DIR} (persistent: {str(JOBS_DIR).startswith('/opt/data')})")
 print(f"[ScriptoVision] OUTPUT_DIR = {OUTPUT_DIR}")
 
 # ── Disk-backed job store — survives server restarts ──
