@@ -152,16 +152,16 @@ def _cleanup_old_files(max_age_hours: int = 2):
         print(f"[Startup Cleanup] Freed {cleaned_mb:.1f} MB of old files")
     return cleaned_mb
 
-# Run cleanup on startup — keep files for 6 hours so restarts don't wipe clips mid-job
-_cleanup_old_files(max_age_hours=6)
+# Run cleanup on startup — keep files for 24 hours so videos are downloadable all day
+_cleanup_old_files(max_age_hours=24)
 
-# Schedule periodic cleanup every 60 minutes
+# Schedule periodic cleanup every 2 hours
 def _schedule_cleanup():
     import threading, time
     def _loop():
         while True:
-            time.sleep(3600)  # 60 minutes
-            _cleanup_old_files(max_age_hours=6)
+            time.sleep(7200)  # 2 hours
+            _cleanup_old_files(max_age_hours=24)
     t = threading.Thread(target=_loop, daemon=True)
     t.start()
 
@@ -2463,9 +2463,39 @@ def serve_image(job_id, scene_num):
 def download(job_id):
     job = jobs.get(job_id, {})
     out = job.get("output")
+
+    # Primary: stored path exists
     if out and Path(out).exists():
         return send_file(out, as_attachment=True, download_name=Path(out).name)
-    return jsonify({"error": "File not found"}), 404
+
+    # Fallback 1: stored path has wrong base dir — try remapping to current OUTPUT_DIR
+    if out:
+        out_name = Path(out).name
+        remapped = OUTPUT_DIR / out_name
+        if remapped.exists():
+            jobs.update_field(job_id, "output", str(remapped))  # fix stored path
+            return send_file(str(remapped), as_attachment=True, download_name=out_name)
+
+    # Fallback 2: search OUTPUT_DIR for any mp4 matching the project name
+    project = job.get("project", "")
+    if project and OUTPUT_DIR.exists():
+        candidates = sorted(OUTPUT_DIR.glob(f"{project}_*.mp4"), key=lambda p: p.stat().st_mtime, reverse=True)
+        if candidates:
+            best = candidates[0]
+            jobs.update_field(job_id, "output", str(best))  # fix stored path
+            return send_file(str(best), as_attachment=True, download_name=best.name)
+
+    # Fallback 3: search ALL output dirs (assembler may use different base)
+    for search_dir in [OUTPUT_DIR, _BASE / "output", Path("/var/data/output")]:
+        if not search_dir.exists():
+            continue
+        all_mp4 = sorted(search_dir.glob("*.mp4"), key=lambda p: p.stat().st_mtime, reverse=True)
+        if all_mp4:
+            best = all_mp4[0]
+            jobs.update_field(job_id, "output", str(best))
+            return send_file(str(best), as_attachment=True, download_name=best.name)
+
+    return jsonify({"error": "Video file not found. It may have been cleaned up. Please regenerate."}), 404
 
 
 @app.route("/download_scene/<job_id>/<int:scene_num>")
