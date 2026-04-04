@@ -498,6 +498,7 @@ textarea{resize:vertical;min-height:100px;font-family:monospace;line-height:1.5}
     </button>
     <div class="mode-tabs">
       <button class="mode-tab active" onclick="setMode('script')" id="tab-script">✍️ Script Mode</button>
+      <button class="mode-tab" onclick="setMode('story')" id="tab-story">📖 Add Story</button>
       <button class="mode-tab" onclick="setMode('continue')" id="tab-continue">📺 Continue Series</button>
     </div>
   </div>
@@ -788,6 +789,73 @@ You approve every scene before anything generates."></textarea>
           <div class="btn-row" style="justify-content:center;margin-top:10px">
             <button class="btn btn-secondary btn-sm" onclick="startOver()">🔄 Start Over</button>
           </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ══════════════════════════════════════════════ -->
+    <!-- ADD STORY MODE -->
+    <!-- ══════════════════════════════════════════════ -->
+    <div class="panel" id="panel-story">
+
+      <div id="view-story-input">
+        <div class="section-header">
+          📖 Add Story
+          <span class="sub">Upload or paste a story — AI converts it into a screenplay ready to produce</span>
+        </div>
+        <div class="card">
+          <p style="color:#777;font-size:.85rem;margin-bottom:14px">
+            Got a story written in prose, a book chapter, a short story, or just an idea? Drop it here and the AI will turn it into a full production-ready screenplay with scene headings, character dialogue, and cinematic descriptions.
+          </p>
+
+          <label>Story Title</label>
+          <input type="text" id="story_title" placeholder="e.g. Pressure, The Pilot, Memorial Day '81..." style="margin-bottom:12px">
+
+          <label>Upload Story File <span style="color:#555">(optional — .txt or .md)</span></label>
+          <div class="upload-zone" id="story-upload-zone" onclick="triggerStoryUpload()" style="padding:20px;margin-bottom:12px">
+            <div class="uz-icon" style="font-size:1.5rem">📄</div>
+            <p style="margin:4px 0;color:#888;font-size:.85rem">Click to upload a .txt or .md story file</p>
+            <input type="file" id="story-file-input" accept=".txt,.md,.doc,.docx" style="display:none" onchange="handleStoryFileUpload(this)">
+          </div>
+          <div id="story-file-info" style="display:none;color:#4aff6a;font-size:.82rem;margin-bottom:10px"></div>
+
+          <label>Or Paste Your Story Here</label>
+          <textarea class="big-textarea" id="story_text" placeholder="Paste your story, prose, outline, or idea here...
+
+Example:
+It was Memorial Day 1981 in Roseland. Malik and Andre had just lost the little league championship. On the way home, frustrated and hot, they spotted a shiny bike leaning against a fence outside the corner store. Nobody was watching it...
+
+The AI will convert this into a full screenplay with scene headings, character dialogue, and cinematic descriptions." style="min-height:200px"></textarea>
+
+          <div style="margin-top:12px">
+            <button class="btn btn-primary" onclick="convertStoryToScript()" id="story-convert-btn">
+              🎬 Convert Story to Screenplay
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- STORY RESULT VIEW -->
+      <div id="view-story-result" style="display:none">
+        <div class="section-header">
+          🎬 Screenplay Generated
+          <button class="btn btn-secondary btn-sm" onclick="backToStoryInput()" style="margin-left:auto">← Edit Story</button>
+        </div>
+        <div class="card">
+          <div class="card-title">📝 Screenplay — <span id="story-script-title">Untitled</span></div>
+          <div id="story-characters-detected" style="margin-bottom:10px;display:none">
+            <span style="color:#888;font-size:.8rem">Characters detected: </span>
+            <span id="story-char-list" style="color:#4aff6a;font-size:.8rem"></span>
+          </div>
+          <textarea id="story-generated-script" class="big-textarea" style="font-family:monospace;font-size:.8rem;min-height:400px"></textarea>
+          <div class="btn-row" style="margin-top:12px">
+            <button class="btn btn-primary" style="flex:1" onclick="useStoryScript()">
+              ✅ Use This Screenplay → Review Scenes
+            </button>
+            <button class="btn btn-secondary" onclick="reconvertStory()">&#x1F504; Reconvert</button>
+          </div>
+          <div class="tip">You can edit the screenplay directly above before using it. The AI will break it into scenes on the next step.</div>
         </div>
       </div>
 
@@ -2058,6 +2126,104 @@ function startOver() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// ADD STORY MODE
+// ─────────────────────────────────────────────────────────────────────────────
+let _storyFileData = null;
+
+function triggerStoryUpload() {
+  document.getElementById('story-file-input').click();
+}
+
+function handleStoryFileUpload(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    _storyFileData = { name: file.name, text: e.target.result };
+    document.getElementById('story-file-info').style.display = 'block';
+    document.getElementById('story-file-info').textContent = `✅ Loaded: ${file.name} (${(file.size/1024).toFixed(1)} KB)`;
+    // Auto-fill title from filename if empty
+    const titleEl = document.getElementById('story_title');
+    if (!titleEl.value.trim()) {
+      titleEl.value = file.name.replace(/\.[^.]+$/, '').replace(/[_-]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+    }
+  };
+  reader.readAsText(file);
+}
+
+async function convertStoryToScript() {
+  const btn = document.getElementById('story-convert-btn');
+  const title = document.getElementById('story_title').value.trim() || 'Untitled';
+  let storyText = document.getElementById('story_text').value.trim();
+
+  // Use uploaded file text if no pasted text
+  if (!storyText && _storyFileData) storyText = _storyFileData.text;
+
+  if (!storyText) {
+    notify('⚠️ Please paste your story or upload a file first.');
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = '⏳ Converting to Screenplay...';
+
+  try {
+    const resp = await fetch('/story-to-script', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ story: storyText, title })
+    });
+    const data = await resp.json();
+
+    if (!data.ok) {
+      notify('❌ Conversion failed: ' + data.error);
+      btn.disabled = false;
+      btn.textContent = '🎬 Convert Story to Screenplay';
+      return;
+    }
+
+    // Show result view
+    document.getElementById('story-script-title').textContent = data.title || title;
+    document.getElementById('story-generated-script').value = data.script;
+
+    if (data.characters && data.characters.length > 0) {
+      document.getElementById('story-characters-detected').style.display = 'block';
+      document.getElementById('story-char-list').textContent = data.characters.join(', ');
+    }
+
+    document.getElementById('view-story-input').style.display = 'none';
+    document.getElementById('view-story-result').style.display = 'block';
+
+    notify(`✅ Screenplay generated! ${data.characters ? data.characters.length : 0} characters detected. Review and edit, then click Use This Screenplay.`);
+  } catch (err) {
+    notify('❌ Error: ' + err.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '🎬 Convert Story to Screenplay';
+  }
+}
+
+function useStoryScript() {
+  const script = document.getElementById('story-generated-script').value.trim();
+  if (!script) { notify('⚠️ No screenplay to use.'); return; }
+  // Switch to Script Mode and pre-fill the script textarea
+  setMode('script');
+  document.getElementById('script_input').value = script;
+  notify('✅ Screenplay loaded into Script Mode. Click Analyze Script & Generate Scenes to continue.');
+}
+
+function backToStoryInput() {
+  document.getElementById('view-story-result').style.display = 'none';
+  document.getElementById('view-story-input').style.display = 'block';
+}
+
+async function reconvertStory() {
+  document.getElementById('view-story-result').style.display = 'none';
+  document.getElementById('view-story-input').style.display = 'block';
+  await convertStoryToScript();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // DRAG & DROP on upload zone
 // ─────────────────────────────────────────────────────────────────────────────
 const zone = document.getElementById('upload-zone');
@@ -2912,6 +3078,76 @@ def delete_character_from_bible(name):
         print(f"[CharBible] Deleted character: {name}")
         return jsonify({"ok": True})
     except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/story-to-script", methods=["POST"])
+def story_to_script():
+    """
+    Convert a raw story/prose/outline into a production-ready screenplay.
+    Accepts: text body OR uploaded .txt/.md file.
+    Returns: { script: str, title: str, characters: list }
+    """
+    try:
+        # Accept text or file upload
+        story_text = ""
+        title = "Untitled"
+        if request.content_type and "multipart" in request.content_type:
+            f = request.files.get("story_file")
+            if f:
+                story_text = f.read().decode("utf-8", errors="ignore")
+                title = Path(f.filename).stem.replace("_", " ").replace("-", " ").title()
+        if not story_text:
+            data = request.get_json(force=True, silent=True) or {}
+            story_text = data.get("story", "").strip()
+            title = data.get("title", "Untitled").strip()
+
+        if not story_text:
+            return jsonify({"ok": False, "error": "No story text provided"}), 400
+
+        api_key = os.environ.get("OPENAI_API_KEY", "")
+        if not api_key:
+            return jsonify({"ok": False, "error": "OpenAI API key required for story conversion"}), 400
+
+        from openai import OpenAI as _OAI
+        client = _OAI(api_key=api_key, base_url="https://api.openai.com/v1")
+
+        STORY_TO_SCRIPT_PROMPT = """You are a professional Hollywood screenwriter and story adapter.
+Your job is to take a raw story, prose, outline, or idea and convert it into a clean, production-ready screenplay.
+
+Rules:
+- Format it as a proper screenplay with INT./EXT. scene headings, character names in CAPS, and dialogue
+- Keep the original story's tone, characters, and plot intact
+- Add cinematic scene descriptions that work well for visual generation
+- Include narrator voiceover (V.O.) lines where appropriate to bridge scenes
+- Aim for 5-8 scenes for a short episode, 8-12 for a full episode
+- Each scene should have at least one line of dialogue or narration
+- Character names should be consistent and in ALL CAPS throughout
+- End with a compelling closing scene or cliffhanger
+- Return ONLY the screenplay text, no commentary"""
+
+        resp = client.chat.completions.create(
+            model="gpt-4.1",
+            messages=[
+                {"role": "system", "content": STORY_TO_SCRIPT_PROMPT},
+                {"role": "user", "content": f"Convert this story into a screenplay:\n\nTitle: {title}\n\n{story_text}"}
+            ],
+            temperature=0.5,
+            max_tokens=6000
+        )
+        script = resp.choices[0].message.content.strip()
+
+        # Extract character names from the script (ALL CAPS words before colons)
+        import re as _re
+        chars = list(set(_re.findall(r'^([A-Z][A-Z\s]+)(?:\s*\(.*?\))?\s*$', script, _re.MULTILINE)))
+        chars = [c.strip() for c in chars if len(c.strip()) > 1 and c.strip() not in
+                 ["INT", "EXT", "INT/EXT", "FADE IN", "FADE OUT", "CUT TO", "NARRATOR", "V.O", "O.S"]]
+
+        print(f"[StoryToScript] Converted '{title}' → {len(script)} chars, {len(chars)} characters detected")
+        return jsonify({"ok": True, "script": script, "title": title, "characters": chars[:20]})
+
+    except Exception as e:
+        print(f"[StoryToScript] Error: {e}")
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
