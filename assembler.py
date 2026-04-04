@@ -12,11 +12,28 @@ import requests
 import shutil
 from pathlib import Path
 
-_BASE     = Path(os.environ.get("BASE_DIR", "/home/ubuntu/scriptovision"))
-TEMP_DIR   = _BASE / "temp"
-OUTPUT_DIR = _BASE / "output"
-TEMP_DIR.mkdir(parents=True, exist_ok=True)
-OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+_BASE = Path(os.environ.get("BASE_DIR", "/home/ubuntu/scriptovision"))
+
+def _resolve_dir(env_key: str, default_subdir: str) -> Path:
+    """Use env var path if writable (disk mounted), else fall back to _BASE/subdir."""
+    env_val = os.environ.get(env_key, "")
+    if env_val:
+        p = Path(env_val)
+        if p.parent.exists() or p.exists():
+            try:
+                p.mkdir(parents=True, exist_ok=True)
+                test = p / ".write_test"
+                test.write_text("ok")
+                test.unlink()
+                return p
+            except Exception:
+                pass
+    fallback = _BASE / default_subdir
+    fallback.mkdir(parents=True, exist_ok=True)
+    return fallback
+
+TEMP_DIR   = _resolve_dir("TEMP_DIR",   "temp")
+OUTPUT_DIR = _resolve_dir("OUTPUT_DIR", "output")
 
 FAL_QUEUE_BASE = "https://queue.fal.run"
 

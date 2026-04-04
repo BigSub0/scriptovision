@@ -16,22 +16,44 @@ app = Flask(__name__)
 # Use environment variable BASE_DIR for cloud, fallback to local path
 _BASE = Path(os.environ.get("BASE_DIR", "/home/ubuntu/scriptovision"))
 
-# Use /data persistent disk on Render Pro if env vars are set
-# These directories survive server restarts on Render's persistent disk
-_DATA = Path(os.environ.get("JOBS_DIR", str(_BASE / "jobs"))).parent  # /data or _BASE
-UPLOAD_DIR = Path(os.environ.get("TEMP_DIR",   str(_BASE / "uploads")))
-OUTPUT_DIR = Path(os.environ.get("OUTPUT_DIR", str(_BASE / "output")))
-TEMP_DIR   = Path(os.environ.get("TEMP_DIR",   str(_BASE / "temp")))
-IMAGES_DIR = _BASE / "images"  # ephemeral OK — regenerated each run
-AUDIO_DIR  = _BASE / "audio"   # ephemeral OK — regenerated each run
-for d in [UPLOAD_DIR, OUTPUT_DIR, TEMP_DIR, IMAGES_DIR, AUDIO_DIR]:
+# ── Determine storage paths: use /var/data disk if mounted, else fall back to _BASE ──
+def _resolve_dir(env_key: str, default_subdir: str) -> Path:
+    """
+    Resolve a storage directory:
+    1. Use env var if set AND the parent directory actually exists (disk is mounted)
+    2. Fall back to _BASE/subdir (always writable on Render)
+    """
+    env_val = os.environ.get(env_key, "")
+    if env_val:
+        p = Path(env_val)
+        # Check if the disk mount point exists
+        if p.parent.exists() or p.exists():
+            try:
+                p.mkdir(parents=True, exist_ok=True)
+                # Test write access
+                test = p / ".write_test"
+                test.write_text("ok")
+                test.unlink()
+                return p
+            except Exception as e:
+                print(f"[ScriptoVision] {env_key}={env_val} not writable ({e}), using fallback")
+    fallback = _BASE / default_subdir
+    fallback.mkdir(parents=True, exist_ok=True)
+    return fallback
+
+JOBS_DIR   = _resolve_dir("JOBS_DIR",   "jobs")
+OUTPUT_DIR = _resolve_dir("OUTPUT_DIR", "output")
+TEMP_DIR   = _resolve_dir("TEMP_DIR",   "temp")
+UPLOAD_DIR = _resolve_dir("TEMP_DIR",   "uploads")
+IMAGES_DIR = _BASE / "images"
+AUDIO_DIR  = _BASE / "audio"
+for d in [IMAGES_DIR, AUDIO_DIR]:
     d.mkdir(parents=True, exist_ok=True)
 
-# JOBS_DIR on persistent disk — survives Render restarts
-JOBS_DIR = Path(os.environ.get("JOBS_DIR", str(_BASE / "jobs")))
-JOBS_DIR.mkdir(parents=True, exist_ok=True)
-print(f"[ScriptoVision] JOBS_DIR = {JOBS_DIR} (persistent: {str(JOBS_DIR).startswith('/var/data')})")
+print(f"[ScriptoVision] JOBS_DIR   = {JOBS_DIR}")
 print(f"[ScriptoVision] OUTPUT_DIR = {OUTPUT_DIR}")
+print(f"[ScriptoVision] TEMP_DIR   = {TEMP_DIR}")
+print(f"[ScriptoVision] Persistent disk: {str(JOBS_DIR).startswith('/var/data')}")
 
 # ── Disk-backed job store — survives server restarts ──
 class JobStore:
@@ -130,20 +152,116 @@ def _cleanup_old_files(max_age_hours: int = 2):
         print(f"[Startup Cleanup] Freed {cleaned_mb:.1f} MB of old files")
     return cleaned_mb
 
-# Run cleanup on startup
-_cleanup_old_files(max_age_hours=2)
+# Run cleanup on startup — keep files for 6 hours so restarts don't wipe clips mid-job
+_cleanup_old_files(max_age_hours=6)
 
-# Schedule periodic cleanup every 30 minutes
+# Schedule periodic cleanup every 60 minutes
 def _schedule_cleanup():
     import threading, time
     def _loop():
         while True:
-            time.sleep(1800)  # 30 minutes
-            _cleanup_old_files(max_age_hours=2)
+            time.sleep(3600)  # 60 minutes
+            _cleanup_old_files(max_age_hours=6)
     t = threading.Thread(target=_loop, daemon=True)
     t.start()
 
 _schedule_cleanup()
+
+# ── Auto-recovery: find orphaned clips from before restart and reassemble ──
+def _auto_recover_clips():
+    """
+    On startup, scan TEMP_DIR for completed scene clips from recent jobs.
+    If we find clips that were never assembled into a final video,
+    auto-assemble them and create a recovery job so the user can download.
+    This handles the case where Render restarts mid-assembly.
+    """
+    import threading, time
+    def _run():
+        time.sleep(5)  # Wait for app to fully start
+        try:
+            # Find all captioned clip groups by project name
+            if not TEMP_DIR.exists():
+                return
+            # Group clips by project name prefix
+            clip_groups = {}
+            for f in TEMP_DIR.glob("*_clip_*_cap.mp4"):
+                parts = f.stem.split("_clip_")
+                if len(parts) == 2:
+                    proj = parts[0]
+                    if proj not in clip_groups:
+                        clip_groups[proj] = []
+                    clip_groups[proj].append(f)
+
+            for proj, clips in clip_groups.items():
+                if len(clips) < 2:
+                    continue  # Skip single clips
+                # Check if there's already a completed output for this project
+                existing_outputs = list(OUTPUT_DIR.glob(f"{proj}_*.mp4")) if OUTPUT_DIR.exists() else []
+                if existing_outputs:
+                    # Output already exists — create a recovery job pointing to it
+                    latest = max(existing_outputs, key=lambda p: p.stat().st_mtime)
+                    recovery_id = f"recovery_{proj[:8]}"
+                    if recovery_id not in jobs:
+                        jobs[recovery_id] = {
+                            "status": "done",
+                            "logs": f"[Auto-Recovery] Found completed video from before restart.\n→ {latest.name}",
+                            "scenes_done": len(clips),
+                            "total_scenes": len(clips),
+                            "status_msg": "Recovered! Video ready to download.",
+                            "output": str(latest),
+                            "project": proj,
+                            "scene_clips": {str(i+1): str(c) for i, c in enumerate(sorted(clips))},
+                            "scene_images": {},
+                            "scene_failures": {},
+                        }
+                        print(f"[Auto-Recovery] Created recovery job {recovery_id} → {latest.name}")
+                    continue
+
+                # No output yet — assemble the clips now
+                sorted_clips = sorted(clips)
+                recovery_id = f"recovery_{proj[:8]}"
+                if recovery_id in jobs:
+                    continue  # Already recovering
+
+                print(f"[Auto-Recovery] Found {len(sorted_clips)} orphaned clips for '{proj}' — reassembling...")
+                jobs[recovery_id] = {
+                    "status": "running",
+                    "logs": f"[Auto-Recovery] Server restarted mid-assembly. Found {len(sorted_clips)} completed clips.\nReassembling final video...\n",
+                    "scenes_done": len(sorted_clips),
+                    "total_scenes": len(sorted_clips),
+                    "status_msg": f"Auto-recovering: assembling {len(sorted_clips)} clips...",
+                    "output": None,
+                    "project": proj,
+                    "scene_clips": {str(i+1): str(c) for i, c in enumerate(sorted_clips)},
+                    "scene_images": {},
+                    "scene_failures": {},
+                }
+
+                def _assemble(rid=recovery_id, clip_list=sorted_clips, project=proj):
+                    try:
+                        import sys
+                        sys.path.insert(0, str(_BASE))
+                        from assembler import assemble_final_video
+                        clip_paths = [str(c) for c in clip_list]
+                        final = assemble_final_video(clip_paths, project, None)
+                        jobs.update_field(rid, "output", final)
+                        jobs.update_field(rid, "status", "done")
+                        jobs.update_field(rid, "status_msg", "Recovered! Video ready to download.")
+                        jobs.update_field(rid, "logs",
+                            jobs.get(rid, {}).get("logs", "") + f"\n✅ Auto-recovery complete! → {final}")
+                        print(f"[Auto-Recovery] ✅ {rid} → {final}")
+                    except Exception as e:
+                        jobs.update_field(rid, "status", "error")
+                        jobs.update_field(rid, "error", str(e))
+                        print(f"[Auto-Recovery] ❌ {rid} failed: {e}")
+
+                threading.Thread(target=_assemble, daemon=True).start()
+        except Exception as e:
+            print(f"[Auto-Recovery] Error: {e}")
+
+    threading.Thread(target=_run, daemon=True).start()
+
+_auto_recover_clips()
 
 # ── API keys loaded from environment variables (set on Render/Railway) ──
 os.environ["ANIMATION_PROVIDER"] = os.environ.get("ANIMATION_PROVIDER", "kling")
@@ -1292,6 +1410,15 @@ async function pollJob(jobId, totalScenes) {
         clearSavedJob();
         break;
       } else if (data.status === 'not_found') {
+        // Check if a recovery job exists (auto-recovery found orphaned clips)
+        if (data.recovery_job_id) {
+          const el = document.getElementById('log-output');
+          if (el) el.textContent = '[Auto-Recovery] Server restarted but your clips were saved!\nReassembling final video...';
+          notify('Server restarted — auto-recovering your clips...');
+          currentJobId = data.recovery_job_id;
+          // Continue polling with the recovery job ID
+          continue;
+        }
         // Server restarted or wrong worker — show clear message
         const el = document.getElementById('log-output');
         if (el) el.textContent += '\n\n\u26a0\ufe0f Server restarted. Your job is no longer in memory. Please regenerate.';
@@ -1996,8 +2123,41 @@ def job_page(job_id):
 def status(job_id):
     job = jobs.get(job_id)
     if job is None:
-        # Job not found — could be server restart or wrong worker
-        # Return a safe response that won't crash the frontend
+        # Job not found — server restarted. Check if auto-recovery found orphaned clips.
+        # Auto-recovery jobs are keyed as recovery_<first8chars_of_project>
+        # Try to find any recovery job that was created after this restart
+        recovery_job = None
+        for rkey in jobs.keys():
+            if rkey.startswith("recovery_"):
+                rjob = jobs.get(rkey, {})
+                if rjob.get("status") in ("done", "running"):
+                    recovery_job = rjob
+                    recovery_job["_recovery_id"] = rkey
+                    break
+
+        if recovery_job:
+            # Found a recovery job — return it with a helpful message
+            sc_clips = recovery_job.get("scene_clips", {})
+            existing_clips = {k: v for k, v in sc_clips.items() if v and Path(v).exists()}
+            status_val = recovery_job.get("status", "running")
+            logs_val = recovery_job.get("logs", "")
+            if status_val == "running":
+                logs_val = f"[Auto-Recovery] Server restarted but your {len(existing_clips)} scene clips were saved!\nReassembling final video now... please wait.\n" + logs_val
+            return jsonify({
+                "status": status_val,
+                "logs": logs_val,
+                "scenes_done": recovery_job.get("scenes_done", len(existing_clips)),
+                "total_scenes": recovery_job.get("total_scenes", len(existing_clips)),
+                "status_msg": recovery_job.get("status_msg", "Auto-recovering..."),
+                "output": recovery_job.get("output"),
+                "error": recovery_job.get("error"),
+                "scene_images": {},
+                "scene_failures": {},
+                "scene_clips": {k: str(v) for k, v in existing_clips.items()},
+                "recovery_job_id": recovery_job.get("_recovery_id"),
+            })
+
+        # No recovery job found either — truly not found
         return jsonify({
             "status": "not_found",
             "logs": "Job not found. The server may have restarted. Please regenerate.",
