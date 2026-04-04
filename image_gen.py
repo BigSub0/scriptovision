@@ -146,9 +146,16 @@ def _dalle_generate(prompt: str, output_path: str, style: str = "cinematic photo
 def _flux_generate(prompt: str, output_path: str, fal_key: str,
                    style: str = "cinematic photorealistic") -> str:
     """Generate image using Fal.ai FLUX Pro as DALL-E fallback."""
-    import time
+    import time, re as _re
+    NEGATIVE_TAIL = "No film crew, no camera equipment, no tripod, no production equipment, no text, no watermarks, no subtitles, no logos, no behind-the-scenes equipment."
     suffix = STYLE_SUFFIXES.get(style, STYLE_SUFFIXES["cinematic photorealistic"])
-    full_prompt = f"{prompt[:900]} {suffix}"
+    # Use same full-prompt logic as DALL-E — preserve character descriptions and negative tail
+    clean_prompt = _re.sub(r'No film crew[^.]*\.', '', prompt, flags=_re.IGNORECASE).strip()
+    combined = f"{clean_prompt} {suffix}"
+    max_body = 3500 - len(NEGATIVE_TAIL) - 2
+    if len(combined) > max_body:
+        combined = combined[:max_body]
+    full_prompt = f"{combined} {NEGATIVE_TAIL}"
 
     headers = {
         "Authorization": f"Key {fal_key}",
