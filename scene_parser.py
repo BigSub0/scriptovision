@@ -46,6 +46,17 @@ VISUAL STYLE RULES — CRITICAL:
 
 The image_prompt MUST start with the visual style description before describing the scene content.
 
+CHARACTER CONSISTENCY RULES — ABSOLUTE REQUIREMENT:
+- Every character that appears in the script has ONE fixed appearance. You MUST describe that exact same face, body, skin tone, hair, and clothing in EVERY scene they appear in.
+- The image_prompt for each scene MUST include a detailed physical description of EVERY character present: skin tone, facial features, hair color/style, build, clothing. Be specific and consistent.
+- NEVER describe a character differently across scenes. Copy the character description exactly from scene to scene.
+- If a character's show bible description is provided, use it verbatim in every scene image_prompt.
+- Characters must be in poses appropriate to the scene action. For dialogue scenes, describe them as "facing each other, talking, neutral standing pose" — NOT drinking, eating, or doing other actions unless the script specifically calls for it.
+
+NEGATIVE PROMPT RULES — ALWAYS EXCLUDE:
+Every image_prompt MUST end with this exact exclusion clause:
+"No film crew, no camera equipment, no tripod, no production equipment, no text, no watermarks, no subtitles, no logos."
+
 Other rules:
 - Keep scenes focused — one location, one key action per scene
 - Dialogue should be natural and match the script exactly
@@ -65,22 +76,27 @@ def parse_script_to_scenes(script_text: str, style: str = "cinematic photorealis
     # Build character consistency block if provided
     char_block = ""
     if character_references:
-        char_block = "\n\nCHARACTER VISUAL REFERENCES (MUST include in every scene image_prompt):\n"
+        char_block = "\n\n=== CHARACTER VISUAL REFERENCES — MANDATORY IN EVERY SCENE ===\n"
+        char_block += "These are the ONLY valid descriptions for each character. Copy them EXACTLY into every image_prompt where that character appears.\n\n"
         for name, ref in character_references.items():
-            char_block += f"- {name}: {ref}\n"
-        char_block += "\nEVERY image_prompt MUST include the character's visual reference exactly as written above."
+            char_block += f"CHARACTER [{name.upper()}]: {ref}\n"
+        char_block += "\n=== END CHARACTER REFERENCES ===\n"
+        char_block += "CRITICAL: Every image_prompt that includes a character MUST paste their full description from above. Do NOT invent new descriptions."
 
     style_prefix = visual_style_prompt or style
 
     user_prompt = f"""Visual style: {style}
-Style prefix for ALL image_prompts: \"{style_prefix}\"
+Style prefix for ALL image_prompts: "{style_prefix}"
 {char_block}
 
 SCRIPT:
 {script_text}
 
 Break this into video scenes. Return a JSON array of scene objects.
-Each image_prompt MUST start with \"{style_prefix}\" and include character visual references.
+Each image_prompt MUST:
+1. Start with "{style_prefix}"
+2. Include the EXACT character description from the references above for every character in the scene
+3. End with: "No film crew, no camera equipment, no tripod, no production equipment, no text, no watermarks, no subtitles, no logos."
 """
     active_client = _get_client(os.environ.get("OPENAI_API_KEY", ""))
     response = active_client.chat.completions.create(

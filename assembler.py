@@ -429,7 +429,77 @@ def _mix_audio(video_path: str, audio_path: str, out_path: str, duration: int):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SUBTITLE OVERLAY
+# LIP SYNC (Kling LipSync via Fal.ai)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def apply_lipsync(clip_path: str, audio_path: str, scene: dict,
+                 project_name: str, fal_key: str) -> str:
+    """
+    Apply Kling LipSync to a scene clip that has dialogue.
+    Takes the animated clip + audio and returns a lip-synced version.
+    Only runs on scenes with actual character dialogue (not voiceover-only scenes).
+    Cost: $0.014 per 5s increment.
+    """
+    dialogue = scene.get("dialogue", [])
+    if not dialogue:
+        # No character dialogue — skip lip sync (voiceover scenes don't need it)
+        return clip_path
+
+    if not audio_path or not Path(audio_path).exists():
+        print(f"    ⚠️  No audio for lip sync — skipping")
+        return clip_path
+
+    if not fal_key:
+        print(f"    ⚠️  No Fal.ai key — skipping lip sync")
+        return clip_path
+
+    scene_num = scene.get("scene_number", 1)
+    lipsync_path = str(TEMP_DIR / f"{project_name}_clip_{scene_num:02d}_lip.mp4")
+
+    if Path(lipsync_path).exists():
+        return lipsync_path
+
+    print(f"    👄 Applying Kling LipSync to scene {scene_num}...")
+
+    try:
+        # Upload clip and audio to Fal.ai CDN
+        video_url = _fal_upload_image(clip_path, fal_key)  # reuse upload helper
+        audio_url = _fal_upload_image(audio_path, fal_key)
+
+        # Submit lip sync job
+        payload = {
+            "video_url": video_url,
+            "audio_url": audio_url,
+        }
+        job = _fal_submit_job("fal-ai/kling-video/lipsync/audio-to-video", payload, fal_key)
+        print(f"    ⏳ LipSync job submitted: {job['request_id']} (takes ~12 min)")
+
+        # Poll for result (lip sync takes ~12 min per Fal.ai docs)
+        result = _fal_poll_job(
+            status_url=job["status_url"],
+            response_url=job["response_url"],
+            request_id=job["request_id"],
+            fal_key=fal_key,
+            max_wait=900,   # 15 min max
+            poll_interval=20
+        )
+
+        video_data = result.get("video", {})
+        lipsync_url = video_data.get("url") if isinstance(video_data, dict) else None
+        if not lipsync_url:
+            raise ValueError(f"No video URL in lip sync result: {result}")
+
+        _fal_download_video(lipsync_url, lipsync_path)
+        print(f"    ✅ LipSync complete → {lipsync_path}")
+        return lipsync_path
+
+    except Exception as e:
+        print(f"    ⚠️  LipSync failed ({e}) — using original animated clip")
+        return clip_path  # Graceful fallback — never crash the pipeline
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SUBTITLE OVERLAY (kept for reference but DISABLED — user does not want subtitles)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def add_subtitles_to_clip(clip_path: str, scene: dict, out_path: str) -> str:
@@ -658,19 +728,29 @@ def assemble_final_video(clip_paths: list, project_name: str,
 
 def process_scene(scene: dict, project_name: str,
                   provider: str = "kling",
-                  add_captions: bool = True) -> str:
+                  add_captions: bool = False) -> str:
     """
     Full pipeline for one scene:
-    image + audio → AI animated clip → add captions → return clip path
+    image + audio → AI animated clip → Kling LipSync (dialogue scenes only) → return clip
+    Subtitles/captions are DISABLED — user does not want them.
+    LipSync is applied automatically to any scene with character dialogue.
     """
     image_path = scene.get("_image_path", "")
     audio_path = scene.get("_audio_path", "")
+    fal_key    = os.environ.get("FAL_KEY", os.environ.get("FAL_API_KEY", ""))
 
+    # Step 1: Animate the scene image
     clip_path = animate_scene(scene, image_path, audio_path,
                               project_name, provider)
 
-    if add_captions:
-        captioned_path = clip_path.replace(".mp4", "_cap.mp4")
-        clip_path = add_subtitles_to_clip(clip_path, scene, captioned_path)
+    # Step 2: Apply lip sync for dialogue scenes (graceful fallback if it fails)
+    if fal_key and scene.get("dialogue"):
+        clip_path = apply_lipsync(
+            clip_path=clip_path,
+            audio_path=audio_path,
+            scene=scene,
+            project_name=project_name,
+            fal_key=fal_key
+        )
 
     return clip_path
