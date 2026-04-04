@@ -609,7 +609,7 @@ textarea{resize:vertical;min-height:100px;font-family:monospace;line-height:1.5}
       <div class="card-title">🎤 Voice Assignments</div>
       <div id="voice-map-rows"></div>
       <div style="font-size:.72rem;color:#444;margin-top:6px">
-        onyx · echo · nova · shimmer · alloy · fable
+        10 male voices · 9 female voices — all ElevenLabs
       </div>
     </div>
 
@@ -2684,7 +2684,8 @@ def generate():
                 log(f"[{sn}/{len(scenes)}] 🎬 Animating scene...")
                 jobs.update_field(job_id, "status_msg", f"Scene {sn}/{len(scenes)} — animating...")
                 try:
-                    clip = process_scene(scene, project, effective_provider, add_captions=False)
+                    clip = process_scene(scene, project, effective_provider,
+                                          add_captions=False, visual_style=style)
                     clip_paths.append(clip)
                     # Persist completed clip to disk
                     current_job = jobs.get(job_id, {})
@@ -3348,7 +3349,8 @@ def retry_failed():
                 log(f"[{sn}/{total}] 🎬 Animating scene...")
                 jobs[retry_job_id]["status_msg"] = f"Scene {sn} — animating..."
                 try:
-                    clip = process_scene(scene, project, provider, add_captions=False)
+                    retry_style = jobs[retry_job_id].get("visual_style", "cinematic photorealistic")
+                    clip = process_scene(scene, project, provider, add_captions=False, visual_style=retry_style)
                     jobs[retry_job_id]["scene_clips"][str(sn)] = clip
                     jobs[retry_job_id]["scenes_done"] += 1
                     log(f"[{sn}/{total}] ✅ Scene complete → {clip}")
