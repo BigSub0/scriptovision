@@ -62,6 +62,7 @@ Other rules:
 - Dialogue should be natural and match the script exactly
 - Motion prompts describe movement, not content (the image handles content)
 - If there is no narrator, leave voiceover as empty string
+- CRITICAL: If a scene is marked [VISUAL ONLY - NO DIALOGUE] or [AMBIENT] or has no spoken lines, set BOTH "voiceover" and "dialogue" to empty ("" and []). Do NOT invent narrator text or dialogue for visual-only scenes.
 - Return ONLY a valid JSON array of scene objects, no other text
 """
 
